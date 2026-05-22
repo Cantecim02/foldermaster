@@ -1,0 +1,14 @@
+node_modules
+**/node_modules/
+dist
+.expo/
+**/.expo/
+.env
+.DS_Store
+*.log
+backend/downloads/
+backend/tmp-smoke/
+tmp-conversion-tests/
+output/
+logs/
+.playwright-cli/

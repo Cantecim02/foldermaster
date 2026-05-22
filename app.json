@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "File Converter",
+    "slug": "multi-file-converter",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "fileconverter",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.multifileconverter",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Used to export converted media files when you choose to save or share them.",
+        "NSPhotoLibraryAddUsageDescription": "Used to save converted media files when you choose to export them.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
+    },
+    "android": {
+      "package": "com.example.multifileconverter",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-document-picker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow File Converter to export converted images and videos.",
+          "savePhotosPermission": "Allow File Converter to save converted files."
+        }
+      ],
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow File Converter to select photos and videos for conversion."
+        }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        }
+      ],
+      "expo-video",
+      "expo-asset"
+    ]
+  }
+}
