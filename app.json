@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "Editio",
+    "slug": "editio",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/branding/foldermaster-launch-clean.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "editio",
+    "splash": {
+      "image": "./assets/branding/foldermaster-launch-clean.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "assetBundlePatterns": [
+      "assets/**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cantecim.editio",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Editio uses your camera to scan documents.",
+        "NSPhotoLibraryUsageDescription": "Used to export converted media files when you choose to save or share them.",
+        "NSPhotoLibraryAddUsageDescription": "Used to save converted media files when you choose to export them.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
+    },
+    "android": {
+      "package": "com.cantecim.editio",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/branding/foldermaster-launch-clean.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-document-picker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Editio to export converted images and videos.",
+          "savePhotosPermission": "Allow Editio to save converted files."
+        }
+      ],
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Editio to select photos and videos for conversion."
+        }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Editio uses your camera to scan documents."
+        }
+      ],
+      "expo-video",
+      "expo-asset",
+      "expo-localization"
+    ]
+  }
+}

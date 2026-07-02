@@ -1,0 +1,4 @@
+FolderMaster test belgesi
+Türkçe karakter testi: ğüşöçıİĞÜŞÖÇ
+Tarih: 2026-06-02
+Bu dosya dönüşüm testleri için oluşturuldu.

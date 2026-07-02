@@ -1,0 +1,14 @@
+node_modules/
+**/node_modules/
+.expo/
+.tmp/
+dist/
+logs/
+output/
+tmp-conversion-tests/
+backend/downloads/
+backend/tmp-smoke/
+test-fixtures/
+tests/
+*.log
+.DS_Store
