@@ -13,3 +13,4 @@ output/
 logs/
 .playwright-cli/
 .tmp/
+backend/.env.docker
