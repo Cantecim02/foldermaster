@@ -83,6 +83,56 @@ cd backend
 npm run build
 ```
 
+Production-like Docker build and verification:
+
+```bash
+cd backend
+docker build --platform linux/amd64 -t editio-backend:local .
+```
+
+Create a local Docker env file when testing the image. Do not commit this file:
+
+```bash
+cat > .env.docker <<'EOF'
+NODE_ENV=production
+PORT=4000
+PUBLIC_BASE_URL=https://api.example.com
+ALLOWED_ORIGINS=
+DOWNLOAD_DIR=/app/data/downloads
+MAX_INPUT_MB=100
+MAX_FILES_PER_REQUEST=10
+MAX_CONCURRENT_JOBS=2
+MAX_PENDING_JOBS=10
+JOB_TTL_MINUTES=30
+TRUST_PROXY_HOPS=0
+FFMPEG_PATH=
+FFPROBE_PATH=
+EOF
+```
+
+Run the container with production mode and bounded resources:
+
+```bash
+docker run --rm \
+  --platform linux/amd64 \
+  --cpus=2 \
+  --memory=4g \
+  --name editio-backend-test \
+  -p 4000:4000 \
+  --env-file .env.docker \
+  editio-backend:local
+```
+
+The Docker image stores temporary uploads and generated outputs under `/app/data/downloads`; this directory is ephemeral unless a host volume is explicitly mounted. The service does not require persistent document storage.
+
+With the container running, verify native Linux dependencies and endpoints:
+
+```bash
+DOCKER_CONTAINER=editio-backend-test DOCKER_VERIFY_BASE_URL=http://127.0.0.1:4000 npm run docker:verify
+```
+
+The runtime image is Debian/glibc based, runs as the non-root `node` user, includes `tini` for signal forwarding, and health-checks `GET /health` inside the container.
+
 ## Run on a simulator or device
 
 Start the Expo server:
