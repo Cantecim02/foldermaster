@@ -18,7 +18,13 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com"
+      },
+      "ios": {
+        "simulator": false
+      }
     }
   },
   "submit": {
