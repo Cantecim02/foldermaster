@@ -101,7 +101,7 @@ export async function convertUploadedImagesToPdf({ files, context = {} }) {
   };
 }
 
-export async function compressUploadedPdf({ file, context = {} }) {
+export async function compressUploadedPdf({ file, compressionPreset = "balanced", context = {} }) {
   assertNotAborted(context.signal);
   await mkdir(config.downloadDir, { recursive: true });
   if (!isPdfInput(file)) {
@@ -122,7 +122,7 @@ export async function compressUploadedPdf({ file, context = {} }) {
 
   try {
     assertNotAborted(context.signal);
-    const rasterized = await rasterizePdfForCompression(originalBytes, context);
+    const rasterized = await rasterizePdfForCompression(originalBytes, compressionPreset, context);
     candidates.push({ method: "rasterized", bytes: rasterized });
   } catch {
     // Keep the safe rewritten/original fallback below.
@@ -158,7 +158,8 @@ export async function compressUploadedPdf({ file, context = {} }) {
     compressedBytes,
     savedBytes,
     savedPercent: originalBytes.byteLength > 0 ? Math.round((savedBytes / originalBytes.byteLength) * 1000) / 10 : 0,
-    method
+    method,
+    compressionPreset
   };
 }
 
@@ -190,7 +191,7 @@ async function rewritePdfWithObjectStreams(originalBytes) {
   }));
 }
 
-async function rasterizePdfForCompression(originalBytes, context = {}) {
+async function rasterizePdfForCompression(originalBytes, compressionPreset = "balanced", context = {}) {
   const { createCanvas, DOMMatrix, ImageData, Path2D } = await import("@napi-rs/canvas");
   globalThis.DOMMatrix ??= DOMMatrix;
   globalThis.ImageData ??= ImageData;
@@ -205,8 +206,12 @@ async function rasterizePdfForCompression(originalBytes, context = {}) {
   });
   const sourcePdf = await loadingTask.promise;
   const compressedPdf = await PDFDocument.create();
-  const maxRasterDimension = 1500;
-  const jpegQuality = 0.72;
+  const compressionSettings = {
+    quality: { maxRasterDimension: 1900, jpegQuality: 0.84 },
+    balanced: { maxRasterDimension: 1500, jpegQuality: 0.72 },
+    small: { maxRasterDimension: 1100, jpegQuality: 0.56 }
+  }[compressionPreset] ?? { maxRasterDimension: 1500, jpegQuality: 0.72 };
+  const { maxRasterDimension, jpegQuality } = compressionSettings;
 
   for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber += 1) {
     assertNotAborted(context.signal);

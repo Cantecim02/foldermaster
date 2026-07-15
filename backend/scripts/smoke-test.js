@@ -10,6 +10,7 @@ const tempDir = os.tmpdir();
 const pdfPath = path.join(tempDir, "foldermaster-smoke.pdf");
 const pngPath = path.join(tempDir, "foldermaster-smoke.png");
 const smokeDownloadDir = path.join(tempDir, `foldermaster-smoke-downloads-${Date.now()}`);
+const smokeDatabasePath = path.join(smokeDownloadDir, "editio-smoke.sqlite");
 
 const child = spawn(process.execPath, ["src/server.js"], {
   cwd: path.resolve(import.meta.dirname, ".."),
@@ -17,7 +18,8 @@ const child = spawn(process.execPath, ["src/server.js"], {
     ...process.env,
     PORT: String(port),
     PUBLIC_BASE_URL: baseUrl,
-    DOWNLOAD_DIR: smokeDownloadDir
+    DOWNLOAD_DIR: smokeDownloadDir,
+    DATABASE_PATH: smokeDatabasePath
   },
   stdio: ["ignore", "pipe", "pipe"]
 });

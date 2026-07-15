@@ -6,12 +6,15 @@ import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import { mkdir } from "node:fs/promises";
 import { config } from "./config.js";
+import { accountRoutes } from "./routes/accountRoutes.js";
 import { mediaRoutes } from "./routes/mediaRoutes.js";
+import { closeAccountStore, initializeAccountStore } from "./services/accountService.js";
 import { cleanupExpiredFiles, startCleanupTimer, stopCleanupTimer } from "./services/fileCleanupService.js";
 import { conversionQueue } from "./services/conversionJobQueue.js";
 import { createErrorPayload, HttpError } from "./utils/httpError.js";
 
 await mkdir(config.downloadDir, { recursive: true });
+await initializeAccountStore();
 await cleanupExpiredFiles().catch((error) => {
   console.warn(`[cleanup] startup failed: ${sanitizeLogMessage(error)}`);
 });
@@ -57,6 +60,7 @@ app.use(
   })
 );
 
+app.use("/auth", accountRoutes);
 app.use("/", mediaRoutes);
 
 app.use((_request, _response, next) => {
@@ -146,6 +150,7 @@ async function shutdown(signal, exitCode = 0) {
   await cleanupExpiredFiles().catch((error) => {
     console.warn(`[cleanup] shutdown failed: ${sanitizeLogMessage(error)}`);
   });
+  closeAccountStore();
   process.exit(exitCode);
 }
 

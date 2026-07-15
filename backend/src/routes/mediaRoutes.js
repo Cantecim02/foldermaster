@@ -20,6 +20,7 @@ const upload = multer({
   }
 });
 const outputFormatSchema = z.enum(["mp3", "mp4", "gif", "jpg", "png", "webp", "wav", "udf"]);
+const compressionPresetSchema = z.enum(["quality", "balanced", "small"]);
 
 mediaRoutes.get("/health", (_request, response) => {
   response.json({ ok: true });
@@ -108,9 +109,16 @@ mediaRoutes.post("/compress-pdf", upload.single("file"), async (request, respons
     if (!request.file) {
       throw new HttpError(400, "File is required.");
     }
+    const payload = z.object({
+      compressionPreset: compressionPresetSchema.default("balanced")
+    }).parse(request.body);
     await validateUploadedFiles(request.file, ["pdf"], { signal: requestContext.signal });
     const result = await conversionQueue.run(
-      ({ signal }) => compressUploadedPdf({ file: request.file, context: { signal, tracker } }),
+      ({ signal }) => compressUploadedPdf({
+        file: request.file,
+        compressionPreset: payload.compressionPreset,
+        context: { signal, tracker }
+      }),
       { signal: requestContext.signal }
     );
     if (requestContext.signal.aborted) {

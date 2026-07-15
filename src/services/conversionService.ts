@@ -39,6 +39,7 @@ export type PdfCompressionResult = {
   savedBytes: number;
   savedPercent: number;
 };
+export type PdfCompressionPreset = "quality" | "balanced" | "small";
 
 type UdfImage = {
   bytes: Uint8Array;
@@ -108,7 +109,10 @@ export async function convertFiles(params: ConvertParams): Promise<ConvertResult
   return { outputs };
 }
 
-export async function compressPdfFile(file: AppFile): Promise<PdfCompressionResult> {
+export async function compressPdfFile(
+  file: AppFile,
+  compressionPreset: PdfCompressionPreset = "balanced"
+): Promise<PdfCompressionResult> {
   validateFiles([file], "pdf");
   const uploadFile =
     Platform.OS === "web"
@@ -120,7 +124,8 @@ export async function compressPdfFile(file: AppFile): Promise<PdfCompressionResu
         };
   const result = await compressUploadedPdf({
     file: uploadFile,
-    filename: file.name
+    filename: file.name,
+    compressionPreset
   });
 
   return {

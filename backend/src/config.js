@@ -12,6 +12,7 @@ const bundledFfmpegPath = require("ffmpeg-static");
 const bundledFfprobePath = require("ffprobe-static").path;
 const isProduction = process.env.NODE_ENV === "production";
 const port = readNumber("PORT", 4000, { min: 1, max: 65535 });
+const downloadDir = path.resolve(rootDir, process.env.DOWNLOAD_DIR ?? "downloads");
 
 function readNumber(name, fallback, { min, max } = {}) {
   const raw = process.env[name];
@@ -71,7 +72,8 @@ export const config = {
   isProduction,
   port,
   publicBaseUrl: normalizeBaseUrl(process.env.PUBLIC_BASE_URL?.trim()),
-  downloadDir: path.resolve(rootDir, process.env.DOWNLOAD_DIR ?? "downloads"),
+  downloadDir,
+  databasePath: path.resolve(rootDir, process.env.DATABASE_PATH ?? "data/editio.sqlite"),
   maxInputBytes: readNumber("MAX_INPUT_MB", 100, { min: 1, max: 500 }) * 1024 * 1024,
   maxFilesPerRequest: readNumber("MAX_FILES_PER_REQUEST", 10, { min: 1, max: 50 }),
   maxConcurrentJobs: readNumber("MAX_CONCURRENT_JOBS", 2, { min: 1, max: 8 }),
@@ -82,6 +84,10 @@ export const config = {
     "ALLOWED_ORIGINS",
     isProduction ? "" : "http://localhost:8081,http://localhost:8082,http://localhost:8090"
   ),
+  authSessionDays: readNumber("AUTH_SESSION_DAYS", 30, { min: 1, max: 365 }),
+  minAccountAge: readNumber("MIN_ACCOUNT_AGE", 13, { min: 13, max: 18 }),
+  termsVersion: process.env.TERMS_VERSION?.trim() || "2026-07-15",
+  privacyVersion: process.env.PRIVACY_VERSION?.trim() || "2026-07-15",
   ffmpegPath: process.env.FFMPEG_PATH?.trim() || bundledFfmpegPath || "ffmpeg",
   ffprobePath: process.env.FFPROBE_PATH?.trim() || bundledFfprobePath || "ffprobe"
 };

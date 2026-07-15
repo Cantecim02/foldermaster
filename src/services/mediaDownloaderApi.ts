@@ -17,6 +17,7 @@ export type PdfCompressionResponse = {
   savedPercent: number;
   method: string;
 };
+export type PdfCompressionPreset = "quality" | "balanced" | "small";
 
 export async function convertUploadedMediaFile(params: {
   file: Blob | NativeUploadFile;
@@ -71,6 +72,7 @@ export async function convertUploadedImagesToPdf(params: {
 export async function compressUploadedPdf(params: {
   file: Blob | NativeUploadFile;
   filename: string;
+  compressionPreset?: PdfCompressionPreset;
 }) {
   const form = new FormData();
   if (isNativeUploadFile(params.file)) {
@@ -78,6 +80,7 @@ export async function compressUploadedPdf(params: {
   } else {
     form.append("file", params.file, params.filename);
   }
+  form.append("compressionPreset", params.compressionPreset ?? "balanced");
 
   const response = await postMultipartWithRetry<PdfCompressionResponse>(
     `${getApiBaseUrl()}/compress-pdf`,
@@ -129,7 +132,7 @@ function isNativeUploadFile(file: Blob | NativeUploadFile): file is NativeUpload
   return typeof (file as NativeUploadFile).uri === "string";
 }
 
-function getApiBaseUrl() {
+export function getApiBaseUrl() {
   const apiBaseUrl = resolveApiBaseUrl();
   if (!apiBaseUrl) {
     throw new Error("ERR_BACKEND_URL_MISSING");

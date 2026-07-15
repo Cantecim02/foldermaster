@@ -10,6 +10,7 @@ FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=4000 \
     DOWNLOAD_DIR=/app/data/downloads \
+    DATABASE_PATH=/app/data/editio.sqlite \
     HOME=/app/data \
     npm_config_cache=/app/data/npm-cache
 

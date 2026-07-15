@@ -59,6 +59,37 @@ test("invalid image content is rejected before image-to-PDF conversion", async (
   });
 });
 
+test("invalid PDF compression preset is rejected", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await uploadFile(baseUrl, "/compress-pdf", {
+      field: "file",
+      bytes: await makePdfBytes(),
+      filename: "valid.pdf",
+      type: "application/pdf",
+      fields: { compressionPreset: "extreme" }
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.success, false);
+  });
+});
+
+test("valid PDF compression preset is applied", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await uploadFile(baseUrl, "/compress-pdf", {
+      field: "file",
+      bytes: await makePdfBytes(),
+      filename: "valid.pdf",
+      type: "application/pdf",
+      fields: { compressionPreset: "small" }
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.compressionPreset, "small");
+    assert.match(body.filename, /\.pdf$/);
+  });
+});
+
 test("oversized upload returns 413", async () => {
   await withServer(async ({ baseUrl }) => {
     const bytes = Buffer.concat([tinyPng, Buffer.alloc(1024 * 1024 + 10)]);
@@ -211,6 +242,7 @@ async function withServer(fn, env = {}) {
       PORT: String(port),
       PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
       DOWNLOAD_DIR: downloadDir,
+      DATABASE_PATH: path.join(downloadDir, "editio-test.sqlite"),
       MAX_INPUT_MB: "1",
       MAX_FILES_PER_REQUEST: "10",
       MAX_CONCURRENT_JOBS: "2",
@@ -275,7 +307,8 @@ async function assertRejectsProductionBaseUrl(publicBaseUrl) {
       NODE_ENV: "production",
       PORT: String(5200 + Math.floor(Math.random() * 1000)),
       PUBLIC_BASE_URL: publicBaseUrl,
-      DOWNLOAD_DIR: downloadDir
+      DOWNLOAD_DIR: downloadDir,
+      DATABASE_PATH: path.join(downloadDir, "editio-test.sqlite")
     },
     stdio: ["ignore", "ignore", "pipe"]
   });

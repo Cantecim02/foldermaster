@@ -178,6 +178,7 @@ export function DocumentEditorScreen(props: Props) {
   const draftPointsRef = useRef<EditorPoint[]>([]);
   const signaturePointsRef = useRef<EditorPoint[]>([]);
   const startPanRef = useRef({ x: 0, y: 0 });
+  const pageRailRef = useRef<ScrollView>(null);
   const activeToolRef = useRef(activeTool);
   const panRef = useRef(pan);
   const surfaceSizeRef = useRef(surfaceSize);
@@ -196,6 +197,10 @@ export function DocumentEditorScreen(props: Props) {
   pageCountRef.current = pageCount;
   const { height, width } = useWindowDimensions();
   const isLandscape = width > height;
+  const pageRailHeight = Math.min(
+    Math.max(1, pageCount) * 33 + 10,
+    isLandscape ? Math.max(118, height - 220) : Math.max(190, Math.min(430, height * 0.56))
+  );
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
   const visibleLayers = useMemo(
     () => layers.filter((layer) => layer.page === pageNumber).sort((left, right) => documentLayerVisualWeight(left) - documentLayerVisualWeight(right)),
@@ -230,6 +235,16 @@ export function DocumentEditorScreen(props: Props) {
   useEffect(() => {
     setPan({ x: 0, y: 0 });
   }, [isLandscape, pageNumber, previewSource?.uri]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      pageRailRef.current?.scrollTo({
+        animated: true,
+        y: Math.max(0, (pageNumber - 1) * 33 - 33)
+      });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [isLandscape, pageCount, pageNumber]);
 
   const documentPanResponder = useMemo(
     () =>
@@ -642,7 +657,17 @@ export function DocumentEditorScreen(props: Props) {
             <Text numberOfLines={1} style={[styles.editorToastText, { color: theme.colors.muted }]}>{message}</Text>
           </View>
         ) : null}
-        <View style={[styles.pageRail, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+        <ScrollView
+          ref={pageRailRef}
+          nestedScrollEnabled
+          style={[
+            styles.pageRail,
+            { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, height: pageRailHeight }
+          ]}
+          contentContainerStyle={styles.pageRailContent}
+          showsVerticalScrollIndicator={pageCount > 6}
+          persistentScrollbar={pageCount > 6}
+        >
           {Array.from({ length: Math.max(1, pageCount) }, (_, index) => {
             const value = index + 1;
             const active = value === pageNumber;
@@ -656,7 +681,7 @@ export function DocumentEditorScreen(props: Props) {
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
         <View style={[styles.zoomDock, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
           <TouchableOpacity style={styles.zoomButton} onPress={() => setZoomLevel(zoom - 0.15)}>
             <Feather name="minus" size={15} color={theme.colors.text} />
@@ -1641,14 +1666,13 @@ const styles = StyleSheet.create({
   pageRail: {
     borderRadius: 16,
     borderWidth: 1,
-    gap: 5,
     left: 14,
-    maxHeight: "72%",
-    padding: 5,
     position: "absolute",
     top: 14,
+    width: 42,
     zIndex: 21
   },
+  pageRailContent: { gap: 5, padding: 5 },
   pageRailItem: { alignItems: "center", borderRadius: 10, height: 28, justifyContent: "center", width: 30 },
   pageRailText: { fontSize: 11, fontWeight: "900" },
   zoomDock: {

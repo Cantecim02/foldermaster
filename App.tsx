@@ -4,6 +4,7 @@ import {
   Animated,
   Appearance,
   Easing,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -29,6 +30,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
 import { AppSplashScreen } from "./src/components/AppSplashScreen";
+import { AccountModal } from "./src/components/AccountModal";
 import { ArchiveManager } from "./src/components/ArchiveManager";
 import type { ArchiveQuickIntent } from "./src/components/ArchiveManager";
 import { ConversionForm } from "./src/components/ConversionForm";
@@ -40,7 +42,8 @@ import { ProgressBar } from "./src/components/ProgressBar";
 import { InstagramGradient } from "./src/components/ui/InstagramGradient";
 import { useHistory } from "./src/hooks/useHistory";
 import { Language, getInitialLanguage, translations } from "./src/i18n";
-import { compressPdfFile, convertFiles } from "./src/services/conversionService";
+import { compressPdfFile, convertFiles, type PdfCompressionPreset } from "./src/services/conversionService";
+import { AccountUser, restoreAccountSession } from "./src/services/authService";
 import { getAvailableOutputs, mimeByType, supportedConversions } from "./src/services/conversionTypes";
 import { detectFileTypeInfo, fileTypeFromDetection } from "./src/services/fileTypeDetector";
 import {
@@ -85,6 +88,13 @@ const languageOptions: Array<{ code: Language; flag: string; nativeName: string;
   { code: "de", flag: "🇩🇪", nativeName: "Deutsch", englishName: "German" },
   { code: "es", flag: "🇪🇸", nativeName: "Español", englishName: "Spanish" }
 ];
+const conversionPickerMimeTypes = Array.from(
+  new Set(
+    Object.entries(mimeByType)
+      .filter(([type]) => !["zip", "rar", "7z", "tar"].includes(type))
+      .map(([, mime]) => mime)
+  )
+);
 const floatingBrandMark = require("./assets/branding/foldermaster-mark-transparent.png");
 type SavedDrawnSignature = { id: string; points: Array<{ x: number; y: number; move?: boolean }> };
 const mainBrandVisual = require("./assets/branding/foldermaster-launch-clean.png");
@@ -101,7 +111,7 @@ type HomeQuickAction =
   | "zipOpen"
   | "toMp3"
   | "toMp4";
-type SettingsDocumentKey = "privacy" | "terms" | "thirdParty" | "about" | "openSource";
+type SettingsDocumentKey = "privacy" | "terms" | "thirdParty" | "formats" | "about" | "openSource";
 type SettingsDocument = {
   title: string;
   subtitle: string;
@@ -109,13 +119,31 @@ type SettingsDocument = {
   icon: keyof typeof Feather.glyphMap;
   sections: Array<{ title: string; body: string[] }>;
 };
-const settingsDocumentOrder: SettingsDocumentKey[] = ["privacy", "terms", "thirdParty", "about", "openSource"];
+const settingsDocumentOrder: SettingsDocumentKey[] = ["privacy", "terms", "thirdParty", "formats", "about", "openSource"];
+const settingsDocumentTabLabels: Record<Language, Record<SettingsDocumentKey, string>> = {
+  tr: { privacy: "Gizlilik", terms: "Koşullar", thirdParty: "3. taraf", formats: "Formatlar", about: "Hakkında", openSource: "Lisanslar" },
+  en: { privacy: "Privacy", terms: "Terms", thirdParty: "Third party", formats: "Formats", about: "About", openSource: "Licenses" },
+  zh: { privacy: "隐私", terms: "条款", thirdParty: "第三方", formats: "格式", about: "关于", openSource: "许可" },
+  fr: { privacy: "Confidentialité", terms: "Conditions", thirdParty: "Tiers", formats: "Formats", about: "À propos", openSource: "Licences" },
+  ru: { privacy: "Конфиденц.", terms: "Условия", thirdParty: "Сторонние", formats: "Форматы", about: "О приложении", openSource: "Лицензии" },
+  de: { privacy: "Datenschutz", terms: "Bedingungen", thirdParty: "Drittanbieter", formats: "Formate", about: "Über", openSource: "Lizenzen" },
+  es: { privacy: "Privacidad", terms: "Términos", thirdParty: "Terceros", formats: "Formatos", about: "Acerca de", openSource: "Licencias" }
+};
+const legalWebsiteCopies: Record<Language, { text: string; action: string }> = {
+  tr: { text: "Güncel yasal bilgilere www.editioapp.com üzerinden de ulaşabilirsiniz.", action: "Web sitesinde aç" },
+  en: { text: "Current legal information is also available at www.editioapp.com.", action: "Open website" },
+  zh: { text: "您也可以在 www.editioapp.com 查看最新法律信息。", action: "打开网站" },
+  fr: { text: "Les informations légales à jour sont aussi disponibles sur www.editioapp.com.", action: "Ouvrir le site" },
+  ru: { text: "Актуальная юридическая информация также доступна на www.editioapp.com.", action: "Открыть сайт" },
+  de: { text: "Aktuelle rechtliche Informationen finden Sie auch auf www.editioapp.com.", action: "Website öffnen" },
+  es: { text: "La información legal vigente también está disponible en www.editioapp.com.", action: "Abrir sitio web" }
+};
 
 function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, SettingsDocument> {
   const trDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Gizlilik Politikası",
-      subtitle: "Son Güncelleme: 12 Haziran 2026",
+      subtitle: "Son Güncelleme: 15 Temmuz 2026",
       summary: "Dosya işleme, geçici sunucu kullanımı ve güvenlik açıklamaları.",
       icon: "shield",
       sections: [
@@ -123,7 +151,16 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Toplanan Bilgiler",
           body: [
             "Editio, seçtiğiniz dosyaları yalnızca dönüştürme, düzenleme, sıkıştırma veya paylaşım işlemini tamamlamak için işler.",
+            "Hesap oluşturursanız ad, soyad, doğum tarihi, e-posta adresi, rastgele kullanıcı/oturum kimlikleri ve yasal metinleri kabul ettiğiniz tarih ile sürüm bilgileri işlenir.",
             "Uygulama reklam göstermez ve kullanıcıları izlemeye yönelik üçüncü taraf reklam/analitik SDK'sı kullanmaz."
+          ]
+        },
+        {
+          title: "Hesap ve Saklama",
+          body: [
+            "Hesap bilgileri kimlik doğrulama, oturum güvenliği ve hesabınızı yönetebilmeniz için kullanılır. Şifrenin kendisi saklanmaz; yalnızca tek yönlü Argon2id şifre özeti tutulur.",
+            "Hesap bilgileri hesabınızı silene kadar saklanır. Ayarlar > Editio hesabı bölümünden hesabınızı ve aktif oturumlarınızı kalıcı olarak silebilirsiniz.",
+            "Hesap oluşturmak isteğe bağlıdır ve dosya dönüştürme özelliklerini kullanmak için zorunlu değildir."
           ]
         },
         {
@@ -144,7 +181,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Güvenlik ve İletişim",
           body: [
             "Verilerinizi korumak için makul teknik ve idari güvenlik önlemleri uygulanır.",
-            "Gizlilik soruları için support@editio.app adresinden bize ulaşabilirsiniz."
+            "Güncel politika ve destek bilgileri için www.editioapp.com adresini ziyaret edebilirsiniz."
           ]
         }
       ]
@@ -159,7 +196,15 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Hizmet Kullanımı",
           body: [
             "Editio; dosya dönüştürme, PDF düzenleme, imza ekleme, sesli okuma, arşiv oluşturma ve arşiv çıkarma amacıyla sunulur.",
-            "Kullanıcı, uygulamayı yürürlükteki yasalara ve üçüncü taraf haklarına uygun şekilde kullanmalıdır."
+            "Kullanıcı, uygulamayı yürürlükteki yasalara ve üçüncü taraf haklarına uygun şekilde kullanmalıdır.",
+            "Hesap oluştururken doğru bilgiler vermeli, şifrenizi gizli tutmalı ve en az 13 yaşında olmalısınız."
+          ]
+        },
+        {
+          title: "Hesap ve Fesih",
+          body: [
+            "Hesap isteğe bağlıdır. Ayarlar bölümünden oturumu kapatabilir veya hesabınızı kalıcı olarak silebilirsiniz.",
+            "Kötüye kullanım, yasa dışı kullanım veya sistem güvenliğini tehlikeye atan davranışlarda hizmet erişimi sınırlandırılabilir."
           ]
         },
         {
@@ -202,6 +247,26 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
         }
       ]
     },
+    formats: {
+      title: "Desteklenen Formatlar",
+      subtitle: "Dönüştürme, düzenleme ve arşiv araçları",
+      summary: "Editio içinde kullanılabilen belge, görsel, medya ve arşiv formatları.",
+      icon: "layers",
+      sections: [
+        {
+          title: "Belge ve PDF",
+          body: ["PDF, UDF, DOC, DOCX, TXT, RTF, ODT, XLS, XLSX, CSV ve ODS dosyaları desteklenen işleme göre kullanılabilir."]
+        },
+        {
+          title: "Görsel ve Medya",
+          body: ["JPG, PNG, WEBP, GIF, BMP, MP3, WAV, OGG, FLAC, M4A, MP4, MOV, AVI, MKV ve WEBM formatları desteklenen dönüşümlerde kullanılabilir."]
+        },
+        {
+          title: "Arşiv",
+          body: ["ZIP ve TAR arşivleri yalnızca Arşiv bölümünde açılır veya oluşturulur. RAR ve 7Z dosyaları platform desteğine bağlıdır."]
+        }
+      ]
+    },
     about: {
       title: "Editio Hakkında",
       subtitle: "Sürüm 1.0.0",
@@ -239,7 +304,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
   const enDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Privacy Policy",
-      subtitle: "Last updated: June 12, 2026",
+      subtitle: "Last updated: July 15, 2026",
       summary: "File processing, temporary server use, and security.",
       icon: "shield",
       sections: [
@@ -247,7 +312,16 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Information We Process",
           body: [
             "Editio processes selected files only to complete conversion, editing, compression, extraction, or sharing workflows.",
+            "If you create an account, Editio processes your first and last name, date of birth, email address, random user/session identifiers, and the date and version of your legal acceptance.",
             "Editio does not show ads and does not use third-party advertising or user-tracking analytics SDKs."
+          ]
+        },
+        {
+          title: "Accounts and Retention",
+          body: [
+            "Account data is used for authentication, session security, and account management. Editio never stores your plaintext password; it stores only a one-way Argon2id password hash.",
+            "Account data is kept until you delete the account. You can permanently delete your account and active sessions in Settings > Editio account.",
+            "Creating an account is optional and is not required for file conversion features."
           ]
         },
         {
@@ -261,7 +335,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Security and Contact",
           body: [
             "Reasonable technical and administrative safeguards are used to protect your data.",
-            "For privacy questions, contact support@editio.app."
+            "Visit www.editioapp.com for the current policy and support information."
           ]
         }
       ]
@@ -276,7 +350,15 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Service Usage",
           body: [
             "Editio is provided for file conversion, PDF editing, visible signatures, read-aloud, ZIP creation, and archive extraction.",
-            "You must use the app in accordance with applicable laws and third-party rights."
+            "You must use the app in accordance with applicable laws and third-party rights.",
+            "When creating an account, provide accurate information, keep your password confidential, and be at least 13 years old."
+          ]
+        },
+        {
+          title: "Accounts and Termination",
+          body: [
+            "Accounts are optional. You can sign out or permanently delete your account from Settings.",
+            "Access may be limited if misuse, unlawful use, or security abuse is detected."
           ]
         },
         {
@@ -316,6 +398,26 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
             "Each library and service is governed by its own license terms.",
             "Full license terms are available from the respective project owners and package distributions."
           ]
+        }
+      ]
+    },
+    formats: {
+      title: "Supported Formats",
+      subtitle: "Conversion, editing, and archive tools",
+      summary: "Documents, images, media, and archives supported by Editio.",
+      icon: "layers",
+      sections: [
+        {
+          title: "Documents and PDF",
+          body: ["PDF, UDF, DOC, DOCX, TXT, RTF, ODT, XLS, XLSX, CSV, and ODS files are available where the selected operation supports them."]
+        },
+        {
+          title: "Images and Media",
+          body: ["JPG, PNG, WEBP, GIF, BMP, MP3, WAV, OGG, FLAC, M4A, MP4, MOV, AVI, MKV, and WEBM are available for supported conversions."]
+        },
+        {
+          title: "Archives",
+          body: ["ZIP and TAR archives are opened or created only in Archive. RAR and 7Z availability depends on platform support."]
         }
       ]
     },
@@ -572,6 +674,97 @@ const quickActionCopies: Record<Language, Record<HomeQuickAction, { title: strin
   }
 };
 
+type AppUiCopy = {
+  expandActions: string;
+  collapseActions: string;
+  archiveOnlyTitle: string;
+  archiveOnlyBody: string;
+  compressionTitle: string;
+  compressionHint: string;
+  compressionOptions: Record<PdfCompressionPreset, { title: string; body: string }>;
+  infoCenterTitle: string;
+  infoCenterBody: string;
+  accountTitle: string;
+  accountBody: string;
+};
+
+const appUiCopies: Record<Language, AppUiCopy> = {
+  tr: {
+    expandActions: "Tümünü ve açıklamaları göster",
+    collapseActions: "Kompakt görünüme dön",
+    archiveOnlyTitle: "Arşiv dosyası seçilemez",
+    archiveOnlyBody: "ZIP, TAR, RAR ve 7Z dosyaları yalnızca Arşiv bölümünden açılabilir.",
+    compressionTitle: "Sıkıştırma boyutu",
+    compressionHint: "Kalite ve dosya boyutu dengesini seçin.",
+    compressionOptions: {
+      quality: { title: "Kaliteli", body: "Daha net · daha büyük" },
+      balanced: { title: "Dengeli", body: "Önerilen" },
+      small: { title: "Küçük", body: "Daha düşük MB" }
+    },
+    infoCenterTitle: "Yasal bilgiler ve formatlar",
+    infoCenterBody: "Gizlilik, kullanım koşulları, lisanslar ve desteklenen formatlar.",
+    accountTitle: "Editio hesabı",
+    accountBody: "Oturum açın veya e-posta adresinizle hesap oluşturun."
+  },
+  en: {
+    expandActions: "Show all actions and details",
+    collapseActions: "Return to compact view",
+    archiveOnlyTitle: "Archive file not allowed",
+    archiveOnlyBody: "ZIP, TAR, RAR, and 7Z files can only be opened from Archive.",
+    compressionTitle: "Compression size",
+    compressionHint: "Choose the balance between quality and file size.",
+    compressionOptions: {
+      quality: { title: "Quality", body: "Sharper · larger" },
+      balanced: { title: "Balanced", body: "Recommended" },
+      small: { title: "Small", body: "Lower MB" }
+    },
+    infoCenterTitle: "Legal information and formats",
+    infoCenterBody: "Privacy, terms, licenses, and supported formats.",
+    accountTitle: "Editio account",
+    accountBody: "Sign in or create an account with your email address."
+  },
+  zh: {
+    expandActions: "显示所有操作和说明", collapseActions: "返回精简视图",
+    archiveOnlyTitle: "不能选择压缩文件", archiveOnlyBody: "ZIP、TAR、RAR 和 7Z 只能在归档页面打开。",
+    compressionTitle: "压缩大小", compressionHint: "选择质量和文件大小的平衡。",
+    compressionOptions: { quality: { title: "高质量", body: "更清晰 · 更大" }, balanced: { title: "平衡", body: "推荐" }, small: { title: "小文件", body: "更低 MB" } },
+    infoCenterTitle: "法律信息和格式", infoCenterBody: "隐私、条款、许可证和支持的格式。",
+    accountTitle: "Editio 帐户", accountBody: "登录或使用电子邮件创建帐户。"
+  },
+  fr: {
+    expandActions: "Afficher toutes les actions", collapseActions: "Revenir à la vue compacte",
+    archiveOnlyTitle: "Archive non autorisée", archiveOnlyBody: "Les fichiers ZIP, TAR, RAR et 7Z s'ouvrent uniquement dans Archives.",
+    compressionTitle: "Taille de compression", compressionHint: "Choisissez l'équilibre qualité/taille.",
+    compressionOptions: { quality: { title: "Qualité", body: "Plus net · plus grand" }, balanced: { title: "Équilibré", body: "Recommandé" }, small: { title: "Petit", body: "Moins de Mo" } },
+    infoCenterTitle: "Informations légales et formats", infoCenterBody: "Confidentialité, conditions, licences et formats pris en charge.",
+    accountTitle: "Compte Editio", accountBody: "Connectez-vous ou créez un compte par e-mail."
+  },
+  ru: {
+    expandActions: "Показать все действия", collapseActions: "Вернуться к компактному виду",
+    archiveOnlyTitle: "Архив выбрать нельзя", archiveOnlyBody: "ZIP, TAR, RAR и 7Z открываются только в разделе Архив.",
+    compressionTitle: "Размер сжатия", compressionHint: "Выберите баланс качества и размера.",
+    compressionOptions: { quality: { title: "Качество", body: "Четче · больше" }, balanced: { title: "Баланс", body: "Рекомендуется" }, small: { title: "Малый", body: "Меньше МБ" } },
+    infoCenterTitle: "Правовая информация и форматы", infoCenterBody: "Конфиденциальность, условия, лицензии и форматы.",
+    accountTitle: "Аккаунт Editio", accountBody: "Войдите или создайте аккаунт по электронной почте."
+  },
+  de: {
+    expandActions: "Alle Aktionen und Details", collapseActions: "Zur kompakten Ansicht",
+    archiveOnlyTitle: "Archivdatei nicht erlaubt", archiveOnlyBody: "ZIP, TAR, RAR und 7Z können nur im Archiv geöffnet werden.",
+    compressionTitle: "Komprimierungsgröße", compressionHint: "Qualität und Dateigröße ausbalancieren.",
+    compressionOptions: { quality: { title: "Qualität", body: "Schärfer · größer" }, balanced: { title: "Ausgewogen", body: "Empfohlen" }, small: { title: "Klein", body: "Weniger MB" } },
+    infoCenterTitle: "Rechtliches und Formate", infoCenterBody: "Datenschutz, Bedingungen, Lizenzen und unterstützte Formate.",
+    accountTitle: "Editio-Konto", accountBody: "Anmelden oder ein Konto per E-Mail erstellen."
+  },
+  es: {
+    expandActions: "Mostrar acciones y detalles", collapseActions: "Volver a vista compacta",
+    archiveOnlyTitle: "Archivo no permitido", archiveOnlyBody: "ZIP, TAR, RAR y 7Z solo se abren desde Archivo.",
+    compressionTitle: "Tamaño de compresión", compressionHint: "Elige el equilibrio entre calidad y tamaño.",
+    compressionOptions: { quality: { title: "Calidad", body: "Más nítido · mayor" }, balanced: { title: "Equilibrado", body: "Recomendado" }, small: { title: "Pequeño", body: "Menos MB" } },
+    infoCenterTitle: "Información legal y formatos", infoCenterBody: "Privacidad, términos, licencias y formatos compatibles.",
+    accountTitle: "Cuenta Editio", accountBody: "Inicia sesión o crea una cuenta con tu correo."
+  }
+};
+
 export default function App() {
   const systemScheme = useColorScheme();
   const { width, height } = useWindowDimensions();
@@ -600,9 +793,13 @@ export default function App() {
   const [shareConfirmJob, setShareConfirmJob] = useState<ConversionJob | null>(null);
   const [conversionModalVisible, setConversionModalVisible] = useState(false);
   const [quickActionPicker, setQuickActionPicker] = useState<HomeQuickAction | null>(null);
+  const [quickActionsExpanded, setQuickActionsExpanded] = useState(false);
+  const [pdfCompressionPreset, setPdfCompressionPreset] = useState<PdfCompressionPreset>("balanced");
   const [archiveQuickIntent, setArchiveQuickIntent] = useState<ArchiveQuickIntent | null>(null);
   const [settingsDocumentKey, setSettingsDocumentKey] = useState<SettingsDocumentKey | null>(null);
   const [settingsDocumentVisible, setSettingsDocumentVisible] = useState(false);
+  const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [diagnosticEntries, setDiagnosticEntries] = useState<ErrorLogEntry[]>([]);
   const [isScanningDocument, setIsScanningDocument] = useState(false);
@@ -639,12 +836,21 @@ export default function App() {
   const languageSwitchProgress = useRef(new Animated.Value(0)).current;
   const shouldRestartReadingOnPageChange = useRef(false);
   const settingsDocumentCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnToAccountAfterLegal = useRef(false);
 
   useEffect(() => {
     installErrorMonitor();
     void listInternalErrors()
       .then(setDiagnosticEntries)
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    void restoreAccountSession()
+      .then(setAccountUser)
+      .catch((caught) => {
+        void recordInternalError("warn", [caught], "account.restore");
+      });
   }, []);
 
   useEffect(() => {
@@ -676,9 +882,13 @@ export default function App() {
   const theme = useMemo(() => getTheme(themeMode, systemScheme), [themeMode, systemScheme]);
   const t = translations[language];
   const isLandscape = width > height;
+  const appUiCopy = appUiCopies[language] ?? appUiCopies.en;
+  const modalBorderColor = theme.isDark ? theme.colors.border : "#C7C9D1";
   const settingsDocuments = useMemo(() => getSettingsDocuments(language), [language]);
   const activeSettingsDocument = settingsDocumentKey ? settingsDocuments[settingsDocumentKey] : null;
   const currentLanguageOption = languageOptions.find((item) => item.code === language) ?? languageOptions[0];
+  const legalTabLabels = settingsDocumentTabLabels[language] ?? settingsDocumentTabLabels.en;
+  const legalWebsiteCopy = legalWebsiteCopies[language] ?? legalWebsiteCopies.en;
   const quickActionSectionCopy = quickActionSectionCopies[language] ?? quickActionSectionCopies.en;
   const localizedQuickActionItems = quickActionItems.map((item) => ({
     ...item,
@@ -703,6 +913,10 @@ export default function App() {
     outputRange: ["8%", "100%"]
   });
 
+  const closeAccountModal = () => {
+    setAccountModalVisible(false);
+  };
+
   const openSettingsDocument = (key: SettingsDocumentKey) => {
     if (settingsDocumentCloseTimer.current) {
       clearTimeout(settingsDocumentCloseTimer.current);
@@ -712,11 +926,27 @@ export default function App() {
     setSettingsDocumentVisible(true);
   };
 
+  const openAccountLegalDocument = (key: "privacy" | "terms") => {
+    returnToAccountAfterLegal.current = true;
+    setAccountModalVisible(false);
+    openSettingsDocument(key);
+  };
+
+  const openLegalWebsite = () => {
+    void Linking.openURL("https://www.editioapp.com").catch((caught) => {
+      void recordInternalError("warn", [caught], "legal.website");
+    });
+  };
+
   const closeSettingsDocument = () => {
     setSettingsDocumentVisible(false);
     if (settingsDocumentCloseTimer.current) clearTimeout(settingsDocumentCloseTimer.current);
     settingsDocumentCloseTimer.current = setTimeout(() => {
       setSettingsDocumentKey(null);
+      if (returnToAccountAfterLegal.current) {
+        returnToAccountAfterLegal.current = false;
+        setAccountModalVisible(true);
+      }
       settingsDocumentCloseTimer.current = null;
     }, 320);
   };
@@ -944,7 +1174,7 @@ export default function App() {
     const result = await DocumentPicker.getDocumentAsync({
       multiple: true,
       copyToCacheDirectory: true,
-      type: "*/*"
+      type: conversionPickerMimeTypes
     });
 
     if (result.canceled) return;
@@ -997,9 +1227,26 @@ export default function App() {
     preferredOutput?: FileType,
     options: { showPreparation?: boolean } = {}
   ) => {
-    const detectedType = detectFileTypeFromFile(nextFiles[0]);
+    const acceptedConversionFiles = nextFiles.filter(
+      (file) => routeFileForOperation(file, "convert").category !== "archive"
+    );
+    if (acceptedConversionFiles.length !== nextFiles.length) {
+      Alert.alert(appUiCopy.archiveOnlyTitle, appUiCopy.archiveOnlyBody);
+    }
+    if (acceptedConversionFiles.length === 0 && nextFiles.length > 0) {
+      setFiles([]);
+      setError(appUiCopy.archiveOnlyBody);
+      setLastJob(null);
+      setIsPreparingSelection(false);
+      setShowPrepareNotice(false);
+      setPreparationProgress(0);
+      setConversionModalVisible(false);
+      return;
+    }
+
+    const detectedType = detectFileTypeFromFile(acceptedConversionFiles[0]);
     const shouldLimit = shouldLimitToSingleFile(detectedType);
-    const acceptedFiles = shouldLimit ? nextFiles.slice(0, 1) : nextFiles;
+    const acceptedFiles = shouldLimit ? acceptedConversionFiles.slice(0, 1) : acceptedConversionFiles;
     const shouldShowPreparation = (options.showPreparation ?? true) && acceptedFiles.length > 0;
     const route = acceptedFiles[0] ? routeFileForOperation(acceptedFiles[0], "convert") : null;
     if (route) {
@@ -1013,7 +1260,7 @@ export default function App() {
     }
 
     setFiles(acceptedFiles);
-    setError(shouldLimit && nextFiles.length > 1 ? t.singleMediaOnly : null);
+    setError(shouldLimit && acceptedConversionFiles.length > 1 ? t.singleMediaOnly : null);
     setLastJob(null);
 
     if (detectedType) {
@@ -1198,7 +1445,7 @@ export default function App() {
     }
   };
 
-  const runPdfCompression = async (file: AppFile) => {
+  const runPdfCompression = async (file: AppFile, preset: PdfCompressionPreset = "balanced") => {
     let compressionStartedAt: number | null = null;
     let progressTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1223,7 +1470,7 @@ export default function App() {
         setProgress((current) => Math.min(0.92, current + 0.07));
       }, 180);
 
-      const result = await compressPdfFile(file);
+      const result = await compressPdfFile(file, preset);
       if (progressTimer) {
         clearInterval(progressTimer);
         progressTimer = null;
@@ -1251,7 +1498,7 @@ export default function App() {
       }
       void recordInternalError(
         "error",
-        [caught, { feature: "pdfCompression", file: file.name }],
+        [caught, { feature: "pdfCompression", file: file.name, preset }],
         "pdf.compress"
       );
       const message = localizeConversionError(caught, t);
@@ -1395,6 +1642,7 @@ export default function App() {
       void scanDocumentToPdf();
       return;
     }
+    if (action === "compressPdf") setPdfCompressionPreset("balanced");
     setQuickActionPicker(action);
   };
 
@@ -1534,7 +1782,7 @@ export default function App() {
 
     if (action === "compressPdf") {
       setActiveTab("convert");
-      await runPdfCompression(selected[0]);
+      await runPdfCompression(selected[0], pdfCompressionPreset);
       return;
     }
 
@@ -2173,6 +2421,16 @@ export default function App() {
             </View>
           </View>
         </Modal>
+        <AccountModal
+          visible={accountModalVisible}
+          isLandscape={isLandscape}
+          language={language}
+          theme={theme}
+          user={accountUser}
+          onUserChange={setAccountUser}
+          onClose={closeAccountModal}
+          onOpenLegal={openAccountLegalDocument}
+        />
         <Modal
           transparent
           animationType="fade"
@@ -2185,7 +2443,7 @@ export default function App() {
               style={[
                 styles.legalModal,
                 isLandscape && styles.legalModalLandscape,
-                { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }
+                { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }
               ]}
             >
               {activeSettingsDocument ? (
@@ -2210,6 +2468,35 @@ export default function App() {
                     </TouchableOpacity>
                   </View>
                   <ScrollView
+                    horizontal
+                    style={styles.legalTabsScroll}
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.legalSectionTabs}
+                  >
+                    {settingsDocumentOrder.map((key) => {
+                      const document = settingsDocuments[key];
+                      const selected = settingsDocumentKey === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={[
+                            styles.legalSectionTab,
+                            {
+                              backgroundColor: selected ? theme.colors.primarySoft : theme.colors.surfaceAlt,
+                              borderColor: selected ? theme.colors.primary : theme.colors.border
+                            }
+                          ]}
+                          onPress={() => setSettingsDocumentKey(key)}
+                        >
+                          <Feather name={document.icon} size={14} color={selected ? theme.colors.primary : theme.colors.muted} />
+                          <Text numberOfLines={1} style={[styles.legalSectionTabText, { color: selected ? theme.colors.primary : theme.colors.text }]}>
+                            {legalTabLabels[key]}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                  <ScrollView
                     style={styles.legalScroll}
                     contentContainerStyle={styles.legalScrollContent}
                     showsVerticalScrollIndicator={false}
@@ -2226,6 +2513,15 @@ export default function App() {
                         ))}
                       </View>
                     ))}
+                    <View style={[styles.legalWebsiteCard, { backgroundColor: theme.colors.primarySoft, borderColor: theme.colors.primary }]}>
+                      <Feather name="globe" size={18} color={theme.colors.primary} />
+                      <View style={styles.legalWebsiteTextWrap}>
+                        <Text style={[styles.legalWebsiteText, { color: theme.colors.text }]}>{legalWebsiteCopy.text}</Text>
+                        <TouchableOpacity onPress={openLegalWebsite}>
+                          <Text style={[styles.legalWebsiteLink, { color: theme.colors.primary }]}>{legalWebsiteCopy.action}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                   </ScrollView>
                 </>
               ) : null}
@@ -2349,7 +2645,7 @@ export default function App() {
           onRequestClose={() => setEditorResultModalVisible(false)}
         >
           <View style={styles.modalOverlay}>
-            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }]}>
               <View style={[styles.actionModalIcon, { backgroundColor: theme.colors.primarySoft }]}>
                 <Feather name="check-circle" size={22} color={theme.colors.primary} />
               </View>
@@ -2384,7 +2680,7 @@ export default function App() {
           onRequestClose={() => setRenameTarget(null)}
         >
           <View style={styles.modalOverlay}>
-            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }]}>
               <View style={[styles.actionModalIcon, { backgroundColor: theme.colors.primarySoft }]}>
                 <Feather name="edit-3" size={22} color={theme.colors.primary} />
               </View>
@@ -2432,7 +2728,7 @@ export default function App() {
           onRequestClose={() => setShareConfirmJob(null)}
         >
           <View style={styles.modalOverlay}>
-            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }]}>
               <View style={[styles.actionModalIcon, { backgroundColor: theme.colors.primarySoft }]}>
                 <Feather name="share-2" size={22} color={theme.colors.primary} />
               </View>
@@ -2467,7 +2763,7 @@ export default function App() {
           onRequestClose={() => setQuickActionPicker(null)}
         >
           <View style={styles.modalOverlay}>
-            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.actionModal, { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }]}>
               <View style={[styles.actionModalIcon, { backgroundColor: theme.colors.primarySoft }]}>
                 <Feather name={quickActionPickerItem.icon} size={22} color={theme.colors.primary} />
               </View>
@@ -2477,6 +2773,40 @@ export default function App() {
               <Text style={[styles.actionModalBody, { color: theme.colors.muted }]}>
                 {quickActionPickerItem.body}
               </Text>
+              {quickActionPicker === "compressPdf" ? (
+                <View style={styles.compressionPresetBlock}>
+                  <View>
+                    <Text style={[styles.compressionPresetTitle, { color: theme.colors.text }]}>{appUiCopy.compressionTitle}</Text>
+                    <Text style={[styles.compressionPresetHint, { color: theme.colors.muted }]}>{appUiCopy.compressionHint}</Text>
+                  </View>
+                  <View style={styles.compressionPresetRow}>
+                    {(["quality", "balanced", "small"] as PdfCompressionPreset[]).map((preset) => {
+                      const selected = pdfCompressionPreset === preset;
+                      const copy = appUiCopy.compressionOptions[preset];
+                      return (
+                        <TouchableOpacity
+                          key={preset}
+                          style={[
+                            styles.compressionPresetOption,
+                            {
+                              backgroundColor: selected ? theme.colors.primarySoft : theme.colors.surfaceAlt,
+                              borderColor: selected ? theme.colors.primary : theme.colors.border
+                            }
+                          ]}
+                          onPress={() => setPdfCompressionPreset(preset)}
+                        >
+                          <Text style={[styles.compressionPresetOptionTitle, { color: selected ? theme.colors.primary : theme.colors.text }]}>
+                            {copy.title}
+                          </Text>
+                          <Text numberOfLines={2} style={[styles.compressionPresetOptionBody, { color: theme.colors.muted }]}>
+                            {copy.body}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.actionModalButtons}>
                 <TouchableOpacity
                   style={[styles.actionCancelButton, { borderColor: theme.colors.border }]}
@@ -2513,7 +2843,7 @@ export default function App() {
           onRequestClose={() => setLanguageModalVisible(false)}
         >
           <View style={styles.modalOverlay}>
-            <View style={[styles.languageModal, isLandscape && styles.languageModalLandscape, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+            <View style={[styles.languageModal, isLandscape && styles.languageModalLandscape, { backgroundColor: theme.colors.surface, borderColor: modalBorderColor }]}>
               <View style={styles.languageModalHeader}>
                 <View style={[styles.actionModalIcon, { backgroundColor: theme.colors.primarySoft }]}>
                   <Feather name="globe" size={22} color={theme.colors.primary} />
@@ -3028,33 +3358,73 @@ export default function App() {
                   <Text style={[styles.quickActionTitle, { color: theme.colors.text }]}>{quickActionSectionCopy.title}</Text>
                   <Text style={[styles.quickActionSubtitle, { color: theme.colors.muted }]}>{quickActionSectionCopy.subtitle}</Text>
                 </View>
+                <TouchableOpacity
+                  accessibilityLabel={quickActionsExpanded ? appUiCopy.collapseActions : appUiCopy.expandActions}
+                  style={[styles.quickActionExpandButton, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
+                  onPress={() => setQuickActionsExpanded((current) => !current)}
+                >
+                  <Feather name={quickActionsExpanded ? "minimize-2" : "maximize-2"} size={17} color={theme.colors.primary} />
+                </TouchableOpacity>
               </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.quickActionScroller}
-              >
-                {localizedQuickActionItems.map((item) => (
-                  <TouchableOpacity
-                    key={item.action}
-                    activeOpacity={0.82}
-                    disabled={item.action === "scanDocument" && isScanningDocument}
-                    style={[
-                      styles.quickActionCard,
-                      { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border },
-                      item.action === "scanDocument" && isScanningDocument && styles.disabledQuickActionCard
-                    ]}
-                    onPress={() => openQuickActionPicker(item.action)}
-                  >
-                    <View style={[styles.quickActionIcon, { backgroundColor: item.softColor }]}>
-                      <Feather name={item.icon} size={22} color={item.color} />
-                    </View>
-                    <Text numberOfLines={2} style={[styles.quickActionCardText, { color: theme.colors.text }]}>
-                      {item.title}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              {quickActionsExpanded ? (
+                <ScrollView
+                  nestedScrollEnabled
+                  style={[styles.quickActionGridScroll, isLandscape && styles.quickActionGridScrollLandscape]}
+                  contentContainerStyle={styles.quickActionGrid}
+                  showsVerticalScrollIndicator
+                >
+                  {localizedQuickActionItems.map((item) => (
+                    <TouchableOpacity
+                      key={item.action}
+                      activeOpacity={0.82}
+                      disabled={item.action === "scanDocument" && isScanningDocument}
+                      style={[
+                        styles.quickActionDetailCard,
+                        { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border },
+                        item.action === "scanDocument" && isScanningDocument && styles.disabledQuickActionCard
+                      ]}
+                      onPress={() => openQuickActionPicker(item.action)}
+                    >
+                      <View style={[styles.quickActionIcon, styles.quickActionDetailIcon, { backgroundColor: item.softColor }]}>
+                        <Feather name={item.icon} size={20} color={item.color} />
+                      </View>
+                      <Text numberOfLines={2} style={[styles.quickActionDetailTitle, { color: theme.colors.text }]}>
+                        {item.title}
+                      </Text>
+                      <Text numberOfLines={3} style={[styles.quickActionDetailBody, { color: theme.colors.muted }]}>
+                        {item.body}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.quickActionScroller}
+                >
+                  {localizedQuickActionItems.map((item) => (
+                    <TouchableOpacity
+                      key={item.action}
+                      activeOpacity={0.82}
+                      disabled={item.action === "scanDocument" && isScanningDocument}
+                      style={[
+                        styles.quickActionCard,
+                        { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border },
+                        item.action === "scanDocument" && isScanningDocument && styles.disabledQuickActionCard
+                      ]}
+                      onPress={() => openQuickActionPicker(item.action)}
+                    >
+                      <View style={[styles.quickActionIcon, { backgroundColor: item.softColor }]}>
+                        <Feather name={item.icon} size={22} color={item.color} />
+                      </View>
+                      <Text numberOfLines={2} style={[styles.quickActionCardText, { color: theme.colors.text }]}>
+                        {item.title}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
             </View>
             <ConversionForm
               files={files}
@@ -3195,32 +3565,35 @@ export default function App() {
               </TouchableOpacity>
             ) : null}
 
-            {settingsDocumentOrder.map((key) => {
-              const document = settingsDocuments[key];
-              return (
-                <TouchableOpacity
-                  key={key}
-                  style={[styles.settingsRow, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
-                  onPress={() => openSettingsDocument(key)}
-                >
-                  <View style={[styles.settingsIcon, { backgroundColor: theme.colors.primarySoft }]}>
-                    <Feather name={document.icon} size={18} color={theme.colors.primary} />
-                  </View>
-                  <View style={styles.trashRowText}>
-                    <Text style={[styles.trashName, { color: theme.colors.text }]}>{document.title}</Text>
-                    <Text style={[styles.settingsDocumentSummary, { color: theme.colors.muted }]}>
-                      {document.summary}
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={18} color={theme.colors.muted} />
-                </TouchableOpacity>
-              );
-            })}
+            <TouchableOpacity
+              style={[styles.settingsRow, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
+              onPress={() => openSettingsDocument("privacy")}
+            >
+              <View style={[styles.settingsIcon, { backgroundColor: theme.colors.primarySoft }]}>
+                <Feather name="book-open" size={18} color={theme.colors.primary} />
+              </View>
+              <View style={styles.trashRowText}>
+                <Text style={[styles.trashName, { color: theme.colors.text }]}>{appUiCopy.infoCenterTitle}</Text>
+                <Text style={[styles.settingsDocumentSummary, { color: theme.colors.muted }]}>{appUiCopy.infoCenterBody}</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={theme.colors.muted} />
+            </TouchableOpacity>
 
-            <View style={[styles.infoBlock, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}>
-              <Text style={[styles.trashName, { color: theme.colors.text }]}>{t.supportedFormatsTitle}</Text>
-              <Text style={[styles.errorText, { color: theme.colors.muted }]}>{t.supportedFormatsBody}</Text>
-            </View>
+            <TouchableOpacity
+              style={[styles.settingsRow, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
+              onPress={() => setAccountModalVisible(true)}
+            >
+              <View style={[styles.settingsIcon, { backgroundColor: theme.colors.accentSoft }]}>
+                <Feather name="user" size={18} color={theme.colors.accent} />
+              </View>
+              <View style={styles.trashRowText}>
+                <Text style={[styles.trashName, { color: theme.colors.text }]}>{appUiCopy.accountTitle}</Text>
+                <Text style={[styles.settingsDocumentSummary, { color: theme.colors.muted }]}>
+                  {accountUser ? `${accountUser.firstName} ${accountUser.lastName} · ${accountUser.email}` : appUiCopy.accountBody}
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={theme.colors.muted} />
+            </TouchableOpacity>
 
             <Text style={[styles.versionText, { color: theme.colors.muted }]}>
               Editio · {t.appVersionTitle}: {t.appVersion}
@@ -3379,6 +3752,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     height: 44,
     justifyContent: "center",
+    overflow: "hidden",
+    padding: 0,
     width: 44
   },
   langText: {
@@ -3386,7 +3761,9 @@ const styles = StyleSheet.create({
     fontWeight: "800"
   },
   langFlag: {
-    fontSize: 22
+    fontSize: 22,
+    lineHeight: 28,
+    textAlign: "center"
   },
   bottomTabs: {
     borderTopWidth: 1,
@@ -3460,6 +3837,14 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0
   },
+  quickActionExpandButton: {
+    alignItems: "center",
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: "center",
+    width: 40
+  },
   quickActionTitle: {
     fontSize: 17,
     fontWeight: "900"
@@ -3473,6 +3858,43 @@ const styles = StyleSheet.create({
   quickActionScroller: {
     gap: 10,
     paddingRight: 4
+  },
+  quickActionGridScroll: {
+    maxHeight: 430
+  },
+  quickActionGridScrollLandscape: {
+    maxHeight: 245
+  },
+  quickActionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    paddingBottom: 4,
+    paddingRight: 4
+  },
+  quickActionDetailCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    flexBasis: "47%",
+    flexGrow: 1,
+    gap: 6,
+    minHeight: 142,
+    padding: 12
+  },
+  quickActionDetailIcon: {
+    borderRadius: 14,
+    height: 38,
+    width: 38
+  },
+  quickActionDetailTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    lineHeight: 17
+  },
+  quickActionDetailBody: {
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15
   },
   quickActionCard: {
     alignItems: "center",
@@ -3513,6 +3935,46 @@ const styles = StyleSheet.create({
   quickGalleryText: {
     fontSize: 14,
     fontWeight: "900"
+  },
+  compressionPresetBlock: {
+    gap: 10,
+    width: "100%"
+  },
+  compressionPresetTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    textAlign: "left"
+  },
+  compressionPresetHint: {
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
+    marginTop: 2
+  },
+  compressionPresetRow: {
+    flexDirection: "row",
+    gap: 7
+  },
+  compressionPresetOption: {
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 66,
+    paddingHorizontal: 7,
+    paddingVertical: 8
+  },
+  compressionPresetOptionTitle: {
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  compressionPresetOptionBody: {
+    fontSize: 9,
+    fontWeight: "700",
+    lineHeight: 12,
+    marginTop: 3,
+    textAlign: "center"
   },
   screenPane: {
     gap: 16
@@ -3559,9 +4021,14 @@ const styles = StyleSheet.create({
   actionModal: {
     alignItems: "center",
     borderRadius: 28,
+    borderWidth: 1,
     gap: 14,
     maxWidth: 420,
     padding: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
     width: "100%"
   },
   editorLoaderWrap: {
@@ -3647,6 +4114,10 @@ const styles = StyleSheet.create({
     gap: 14,
     maxWidth: 420,
     padding: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
     width: "100%"
   },
   languageModalLandscape: {
@@ -3691,6 +4162,8 @@ const styles = StyleSheet.create({
   },
   languageFlag: {
     fontSize: 25,
+    lineHeight: 30,
+    textAlign: "center",
     width: 34
   },
   languageFlagLandscape: {
@@ -4172,12 +4645,18 @@ const styles = StyleSheet.create({
   legalModal: {
     borderRadius: 28,
     borderWidth: 1,
-    maxHeight: "82%",
+    height: "82%",
+    maxWidth: 560,
+    overflow: "hidden",
     padding: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
     width: "88%"
   },
   legalModalLandscape: {
-    maxHeight: "86%",
+    height: "88%",
     maxWidth: 660,
     width: "64%"
   },
@@ -4214,12 +4693,37 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 38
   },
+  legalSectionTabs: {
+    gap: 8,
+    paddingRight: 4,
+    paddingVertical: 12
+  },
+  legalTabsScroll: {
+    flexGrow: 0,
+    flexShrink: 0
+  },
+  legalSectionTab: {
+    alignItems: "center",
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 10
+  },
+  legalSectionTabText: {
+    fontSize: 11,
+    fontWeight: "900",
+    maxWidth: 92
+  },
   legalScroll: {
-    marginTop: 16
+    flex: 1,
+    minHeight: 0
   },
   legalScrollContent: {
     gap: 16,
-    paddingBottom: 6
+    paddingBottom: 8,
+    paddingTop: 4
   },
   legalSection: {
     gap: 7
@@ -4232,6 +4736,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 19
+  },
+  legalWebsiteCard: {
+    alignItems: "flex-start",
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    padding: 12
+  },
+  legalWebsiteTextWrap: {
+    flex: 1,
+    gap: 5
+  },
+  legalWebsiteText: {
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17
+  },
+  legalWebsiteLink: {
+    fontSize: 12,
+    fontWeight: "900",
+    textDecorationLine: "underline"
   },
   diagnosticsIntro: {
     fontSize: 12,

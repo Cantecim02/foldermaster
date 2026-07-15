@@ -41,12 +41,16 @@ Required backend environment variables:
 - `PUBLIC_BASE_URL`: public backend URL used for returned download links
 - `ALLOWED_ORIGINS`: comma-separated browser origins when CORS is needed
 - `DOWNLOAD_DIR`: output directory for generated files
+- `DATABASE_PATH`: persistent SQLite account database path
 - `MAX_INPUT_MB`: per-file upload limit
 - `MAX_FILES_PER_REQUEST`: maximum files accepted by multi-file upload endpoints
 - `MAX_CONCURRENT_JOBS`: maximum simultaneous heavy conversion jobs
 - `MAX_PENDING_JOBS`: maximum queued heavy conversion jobs before the backend returns a busy response
 - `JOB_TTL_MINUTES`: generated-file and abandoned-upload retention window
 - `TRUST_PROXY_HOPS`: trusted reverse proxy hop count; keep `0` unless the production host requires proxy headers
+- `AUTH_SESSION_DAYS`: account session duration, from 1 to 365 days
+- `MIN_ACCOUNT_AGE`: minimum registration age, from 13 to 18
+- `TERMS_VERSION` and `PRIVACY_VERSION`: accepted legal-document versions stored with new accounts
 - `FFMPEG_PATH` and `FFPROBE_PATH`: optional binary overrides
 
 Production backend startup:
@@ -63,6 +67,11 @@ MAX_FILES_PER_REQUEST=10 \
 MAX_CONCURRENT_JOBS=2 \
 MAX_PENDING_JOBS=10 \
 JOB_TTL_MINUTES=30 \
+DATABASE_PATH="/var/lib/editio/editio.sqlite" \
+AUTH_SESSION_DAYS=30 \
+MIN_ACCOUNT_AGE=13 \
+TERMS_VERSION=2026-07-15 \
+PRIVACY_VERSION=2026-07-15 \
 npm run start:prod
 ```
 
@@ -99,12 +108,17 @@ PORT=4000
 PUBLIC_BASE_URL=https://api.example.com
 ALLOWED_ORIGINS=
 DOWNLOAD_DIR=/app/data/downloads
+DATABASE_PATH=/app/data/editio.sqlite
 MAX_INPUT_MB=100
 MAX_FILES_PER_REQUEST=10
 MAX_CONCURRENT_JOBS=2
 MAX_PENDING_JOBS=10
 JOB_TTL_MINUTES=30
 TRUST_PROXY_HOPS=0
+AUTH_SESSION_DAYS=30
+MIN_ACCOUNT_AGE=13
+TERMS_VERSION=2026-07-15
+PRIVACY_VERSION=2026-07-15
 FFMPEG_PATH=
 FFPROBE_PATH=
 EOF
@@ -118,12 +132,13 @@ docker run --rm \
   --cpus=2 \
   --memory=4g \
   --name editio-backend-test \
+  --mount source=editio-data,target=/app/data \
   -p 4000:4000 \
   --env-file .env.docker \
   editio-backend:local
 ```
 
-The Docker image stores temporary uploads and generated outputs under `/app/data/downloads`; this directory is ephemeral unless a host volume is explicitly mounted. The service does not require persistent document storage.
+The Docker image stores temporary uploads and generated outputs under `/app/data/downloads` and account records under `/app/data/editio.sqlite`. A persistent `/app/data` volume is required once account creation is enabled. Documents remain temporary and continue to be removed by the cleanup service; back up the SQLite database according to the server's recovery policy.
 
 With the container running, verify native Linux dependencies and endpoints:
 
@@ -172,7 +187,7 @@ The iOS command requires macOS with Xcode. Android requires Android Studio, an e
 ## Production notes
 
 - PDF rendering/extraction, still-image re-encoding, and FFmpeg audio/video conversion are routed to `backend/src/services/uploadConvertService.js`.
-- Backend endpoints currently used by the app are `GET /health`, `POST /convert-file`, `POST /convert-images-to-pdf`, `POST /compress-pdf`, and `GET /files/:filename`.
+- Backend endpoints currently used by the app are `GET /health`, `POST /convert-file`, `POST /convert-images-to-pdf`, `POST /compress-pdf`, `GET /files/:filename`, `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`, and `DELETE /auth/account`.
 - URL-based video download flows are intentionally not included; the app only converts files selected by the user.
 - Keep large-file conversion off the UI thread. For very large media files, prefer queued background jobs and stream-based conversion.
 - Android permissions and iOS document sharing keys live in `app.json`.
@@ -183,7 +198,8 @@ The iOS command requires macOS with Xcode. Android requires Android Studio, an e
 - Build the public app with `EXPO_PUBLIC_MEDIA_API_URL` pointing to the deployed production backend, not a LAN IP or localhost.
 - Keep the backend live during App Review; conversion, PDF rendering, PDF compression, and media conversion depend on it.
 - Create a public privacy policy URL and support URL before submission. The in-app settings screen already includes privacy, terms, third-party notices, about, and open-source summaries.
-- Complete App Store Connect privacy answers from the real production build: no advertising SDKs, no third-party tracking SDKs, selected files are processed only for requested conversion/editing flows.
+- Complete App Store Connect privacy answers from the real production build: Name, Email Address, User ID, and Other Data (date of birth) are linked to identity and used for App Functionality; no advertising or tracking is used. Selected files are processed only for requested conversion/editing flows and are not linked to the account.
+- Before enabling registration in production, deploy the July 15, 2026 privacy policy and terms at `https://www.editioapp.com`, mount and back up the account database volume, and update App Store Connect privacy answers.
 - Set the app as paid in App Store Connect and complete paid app agreements, tax, and banking before release.
 - Provide screenshots for required iPhone and iPad sizes, accurate metadata, and review notes explaining that users must select files they have rights to process.
 - Do not ship development server URLs, simulator fixture UI, test auto-open flags, or internal diagnostics UI in the public build.
