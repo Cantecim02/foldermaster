@@ -1,5 +1,6 @@
 import { ReactNode, useRef } from "react";
 import { Animated, GestureResponderEvent, Pressable, StyleProp, ViewStyle } from "react-native";
+import { motionSpring } from "../../motion";
 
 type Props = {
   children: ReactNode;
@@ -10,17 +11,20 @@ type Props = {
 };
 
 export function AnimatedPressable({ children, containerStyle, disabled, style, onPress }: Props) {
-  const scale = useRef(new Animated.Value(1)).current;
+  const pressed = useRef(new Animated.Value(0)).current;
 
   const animateTo = (value: number) => {
-    // Small scale feedback keeps touch interactions feeling responsive without moving layout.
-    Animated.spring(scale, {
+    pressed.stopAnimation();
+    Animated.spring(pressed, {
+      ...motionSpring,
       toValue: value,
-      useNativeDriver: true,
-      speed: 28,
-      bounciness: 6
+      useNativeDriver: true
     }).start();
   };
+
+  const scale = pressed.interpolate({ inputRange: [0, 1], outputRange: [1, 0.965] });
+  const translateY = pressed.interpolate({ inputRange: [0, 1], outputRange: [0, 1.5] });
+  const opacity = pressed.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] });
 
   return (
     <Pressable
@@ -30,7 +34,15 @@ export function AnimatedPressable({ children, containerStyle, disabled, style, o
       onPressOut={() => animateTo(1)}
       style={containerStyle}
     >
-      <Animated.View style={[style, { opacity: disabled ? 0.55 : 1, transform: [{ scale }] }]}>
+      <Animated.View
+        style={[
+          style,
+          {
+            opacity: disabled ? 0.55 : opacity,
+            transform: [{ translateY }, { scale }]
+          }
+        ]}
+      >
         {children}
       </Animated.View>
     </Pressable>

@@ -3,9 +3,7 @@ import {
   Alert,
   Animated,
   Appearance,
-  Easing,
   Linking,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -31,6 +29,8 @@ import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
 import { AppSplashScreen } from "./src/components/AppSplashScreen";
 import { AccountModal } from "./src/components/AccountModal";
+import type { AccountLifecycleEvent, AccountSessionEndReason } from "./src/components/AccountModal";
+import { AccountLifecycleNotice } from "./src/components/AccountLifecycleNotice";
 import { ArchiveManager } from "./src/components/ArchiveManager";
 import type { ArchiveQuickIntent } from "./src/components/ArchiveManager";
 import { ConversionForm } from "./src/components/ConversionForm";
@@ -38,12 +38,17 @@ import { ConversionLoader } from "./src/components/ConversionLoader";
 import { DocumentEditorCard } from "./src/components/DocumentEditorCard";
 import { DocumentEditorScreen, EditorTool } from "./src/components/DocumentEditorScreen";
 import { HistoryList } from "./src/components/HistoryList";
+import { LanguageTransitionContent } from "./src/components/LanguageTransitionContent";
 import { ProgressBar } from "./src/components/ProgressBar";
+import { ThemePaintTransition } from "./src/components/ThemePaintTransition";
+import { AnimatedPressable } from "./src/components/ui/AnimatedPressable";
 import { InstagramGradient } from "./src/components/ui/InstagramGradient";
+import { MotionModal } from "./src/components/ui/MotionModal";
 import { useHistory } from "./src/hooks/useHistory";
 import { Language, getInitialLanguage, translations } from "./src/i18n";
+import { motionDuration, motionEasing, waitForModalExit } from "./src/motion";
 import { compressPdfFile, convertFiles, type PdfCompressionPreset } from "./src/services/conversionService";
-import { AccountUser, restoreAccountSession } from "./src/services/authService";
+import { AccountUser, recordConversionHistory, restoreAccountSession } from "./src/services/authService";
 import { getAvailableOutputs, mimeByType, supportedConversions } from "./src/services/conversionTypes";
 import { detectFileTypeInfo, fileTypeFromDetection } from "./src/services/fileTypeDetector";
 import {
@@ -61,6 +66,7 @@ import {
   recordInternalError,
   type ErrorLogEntry
 } from "./src/services/errorMonitor";
+import { runNativeSurface, waitForNativeSurfaceExit } from "./src/services/nativeSurfaceCoordinator";
 import {
   DocumentEditLayer,
   DocumentPagePlanItem,
@@ -75,8 +81,9 @@ import { AppFile, ConvertedFile, ConversionJob, FileType } from "./src/types";
 
 const defaultInput: FileType = "pdf";
 const defaultOutput: FileType = "jpg";
-const filePreparationDisplayMs = 1300;
+const filePreparationDisplayMs = 1500;
 const minimumConversionLoaderMs = 1600;
+const minimumEditorOpenLoaderMs = 1200;
 const savedSignaturesStorageKey = "foldermaster.savedDrawnSignatures.v1";
 const showInternalDiagnostics = process.env.EXPO_PUBLIC_INTERNAL_DIAGNOSTICS === "true";
 const languageOptions: Array<{ code: Language; flag: string; nativeName: string; englishName: string }> = [
@@ -97,7 +104,6 @@ const conversionPickerMimeTypes = Array.from(
 );
 const floatingBrandMark = require("./assets/branding/foldermaster-mark-transparent.png");
 type SavedDrawnSignature = { id: string; points: Array<{ x: number; y: number; move?: boolean }> };
-const mainBrandVisual = require("./assets/branding/foldermaster-launch-clean.png");
 type HomeQuickAction =
   | "scanDocument"
   | "createPdf"
@@ -143,7 +149,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
   const trDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Gizlilik Politikası",
-      subtitle: "Son Güncelleme: 15 Temmuz 2026",
+      subtitle: "Son Güncelleme: 16 Temmuz 2026",
       summary: "Dosya işleme, geçici sunucu kullanımı ve güvenlik açıklamaları.",
       icon: "shield",
       sections: [
@@ -160,6 +166,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           body: [
             "Hesap bilgileri kimlik doğrulama, oturum güvenliği ve hesabınızı yönetebilmeniz için kullanılır. Şifrenin kendisi saklanmaz; yalnızca tek yönlü Argon2id şifre özeti tutulur.",
             "Hesap bilgileri hesabınızı silene kadar saklanır. Ayarlar > Editio hesabı bölümünden hesabınızı ve aktif oturumlarınızı kalıcı olarak silebilirsiniz.",
+            "Giriş yapmış kullanıcıların dönüşüm geçmişinde dosya adı, giriş ve çıkış formatı, dosya boyutu, işlem durumu ve işlem tarihi saklanabilir. Dönüştürülen dosyanın kendisi hesap geçmişinde saklanmaz.",
             "Hesap oluşturmak isteğe bağlıdır ve dosya dönüştürme özelliklerini kullanmak için zorunlu değildir."
           ]
         },
@@ -304,7 +311,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
   const enDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Privacy Policy",
-      subtitle: "Last updated: July 15, 2026",
+      subtitle: "Last updated: July 16, 2026",
       summary: "File processing, temporary server use, and security.",
       icon: "shield",
       sections: [
@@ -321,6 +328,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           body: [
             "Account data is used for authentication, session security, and account management. Editio never stores your plaintext password; it stores only a one-way Argon2id password hash.",
             "Account data is kept until you delete the account. You can permanently delete your account and active sessions in Settings > Editio account.",
+            "For signed-in users, conversion history may store the file name, source and output formats, file size, operation status, and operation date. The converted file itself is not stored in account history.",
             "Creating an account is optional and is not required for file conversion features."
           ]
         },
@@ -704,7 +712,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     infoCenterTitle: "Yasal bilgiler ve formatlar",
     infoCenterBody: "Gizlilik, kullanım koşulları, lisanslar ve desteklenen formatlar.",
     accountTitle: "Editio hesabı",
-    accountBody: "Oturum açın veya e-posta adresinizle hesap oluşturun."
+    accountBody: "Dönüşüm geçmişinizi kaydetmek için oturum açın veya hesap oluşturun."
   },
   en: {
     expandActions: "Show all actions and details",
@@ -721,7 +729,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     infoCenterTitle: "Legal information and formats",
     infoCenterBody: "Privacy, terms, licenses, and supported formats.",
     accountTitle: "Editio account",
-    accountBody: "Sign in or create an account with your email address."
+    accountBody: "Sign in or create an account to save your conversion history."
   },
   zh: {
     expandActions: "显示所有操作和说明", collapseActions: "返回精简视图",
@@ -729,7 +737,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     compressionTitle: "压缩大小", compressionHint: "选择质量和文件大小的平衡。",
     compressionOptions: { quality: { title: "高质量", body: "更清晰 · 更大" }, balanced: { title: "平衡", body: "推荐" }, small: { title: "小文件", body: "更低 MB" } },
     infoCenterTitle: "法律信息和格式", infoCenterBody: "隐私、条款、许可证和支持的格式。",
-    accountTitle: "Editio 帐户", accountBody: "登录或使用电子邮件创建帐户。"
+    accountTitle: "Editio 帐户", accountBody: "登录或创建帐户以保存转换历史。"
   },
   fr: {
     expandActions: "Afficher toutes les actions", collapseActions: "Revenir à la vue compacte",
@@ -737,7 +745,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     compressionTitle: "Taille de compression", compressionHint: "Choisissez l'équilibre qualité/taille.",
     compressionOptions: { quality: { title: "Qualité", body: "Plus net · plus grand" }, balanced: { title: "Équilibré", body: "Recommandé" }, small: { title: "Petit", body: "Moins de Mo" } },
     infoCenterTitle: "Informations légales et formats", infoCenterBody: "Confidentialité, conditions, licences et formats pris en charge.",
-    accountTitle: "Compte Editio", accountBody: "Connectez-vous ou créez un compte par e-mail."
+    accountTitle: "Compte Editio", accountBody: "Connectez-vous ou créez un compte pour enregistrer votre historique."
   },
   ru: {
     expandActions: "Показать все действия", collapseActions: "Вернуться к компактному виду",
@@ -745,7 +753,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     compressionTitle: "Размер сжатия", compressionHint: "Выберите баланс качества и размера.",
     compressionOptions: { quality: { title: "Качество", body: "Четче · больше" }, balanced: { title: "Баланс", body: "Рекомендуется" }, small: { title: "Малый", body: "Меньше МБ" } },
     infoCenterTitle: "Правовая информация и форматы", infoCenterBody: "Конфиденциальность, условия, лицензии и форматы.",
-    accountTitle: "Аккаунт Editio", accountBody: "Войдите или создайте аккаунт по электронной почте."
+    accountTitle: "Аккаунт Editio", accountBody: "Войдите или создайте аккаунт, чтобы сохранять историю."
   },
   de: {
     expandActions: "Alle Aktionen und Details", collapseActions: "Zur kompakten Ansicht",
@@ -753,7 +761,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     compressionTitle: "Komprimierungsgröße", compressionHint: "Qualität und Dateigröße ausbalancieren.",
     compressionOptions: { quality: { title: "Qualität", body: "Schärfer · größer" }, balanced: { title: "Ausgewogen", body: "Empfohlen" }, small: { title: "Klein", body: "Weniger MB" } },
     infoCenterTitle: "Rechtliches und Formate", infoCenterBody: "Datenschutz, Bedingungen, Lizenzen und unterstützte Formate.",
-    accountTitle: "Editio-Konto", accountBody: "Anmelden oder ein Konto per E-Mail erstellen."
+    accountTitle: "Editio-Konto", accountBody: "Anmelden oder ein Konto erstellen, um den Verlauf zu speichern."
   },
   es: {
     expandActions: "Mostrar acciones y detalles", collapseActions: "Volver a vista compacta",
@@ -761,7 +769,7 @@ const appUiCopies: Record<Language, AppUiCopy> = {
     compressionTitle: "Tamaño de compresión", compressionHint: "Elige el equilibrio entre calidad y tamaño.",
     compressionOptions: { quality: { title: "Calidad", body: "Más nítido · mayor" }, balanced: { title: "Equilibrado", body: "Recomendado" }, small: { title: "Pequeño", body: "Menos MB" } },
     infoCenterTitle: "Información legal y formatos", infoCenterBody: "Privacidad, términos, licencias y formatos compatibles.",
-    accountTitle: "Cuenta Editio", accountBody: "Inicia sesión o crea una cuenta con tu correo."
+    accountTitle: "Cuenta Editio", accountBody: "Inicia sesión o crea una cuenta para guardar tu historial."
   }
 };
 
@@ -777,6 +785,7 @@ export default function App() {
   const [isConverting, setIsConverting] = useState(false);
   const [isPreparingSelection, setIsPreparingSelection] = useState(false);
   const [showPrepareNotice, setShowPrepareNotice] = useState(false);
+  const [openConversionAfterPreparation, setOpenConversionAfterPreparation] = useState(false);
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [activeTab, setActiveTab] = useState<"convert" | "archive" | "history" | "trash" | "settings" | "editor">("convert");
   const [error, setError] = useState<string | null>(null);
@@ -800,12 +809,14 @@ export default function App() {
   const [settingsDocumentVisible, setSettingsDocumentVisible] = useState(false);
   const [accountModalVisible, setAccountModalVisible] = useState(false);
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
+  const [accountLifecycleEvent, setAccountLifecycleEvent] = useState<AccountLifecycleEvent | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [diagnosticEntries, setDiagnosticEntries] = useState<ErrorLogEntry[]>([]);
   const [isScanningDocument, setIsScanningDocument] = useState(false);
   const [pendingEditorAction, setPendingEditorAction] = useState<"signature" | "read" | null>(null);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [languageTransitionVisible, setLanguageTransitionVisible] = useState(false);
+  const [themeTransitionTarget, setThemeTransitionTarget] = useState<"light" | "dark" | null>(null);
   const [showSplash, setShowSplash] = useState(true);
   const [editorFile, setEditorFile] = useState<AppFile | null>(null);
   const [editorPreviewSource, setEditorPreviewSource] = useState<DocumentPreviewSource | null>(null);
@@ -828,15 +839,21 @@ export default function App() {
   const [speechRate, setSpeechRate] = useState(0.92);
   const [speechVoiceIdentifier, setSpeechVoiceIdentifier] = useState<string | null>(null);
   const screenSlide = useRef(new Animated.Value(0)).current;
+  const screenOpacity = useRef(new Animated.Value(1)).current;
+  const previousTab = useRef(activeTab);
   const convertSpin = useRef(new Animated.Value(0)).current;
   const splashOpacity = useRef(new Animated.Value(1)).current;
   const splashProgress = useRef(new Animated.Value(0)).current;
   const splashScale = useRef(new Animated.Value(0.96)).current;
   const splashTranslateY = useRef(new Animated.Value(10)).current;
   const languageSwitchProgress = useRef(new Animated.Value(0)).current;
+  const languageTransitionRun = useRef(0);
   const shouldRestartReadingOnPageChange = useRef(false);
   const settingsDocumentCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accountLifecycleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filePreparationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const returnToAccountAfterLegal = useRef(false);
+  const lastQuickActionPicker = useRef<HomeQuickAction>("createPdf");
 
   useEffect(() => {
     installErrorMonitor();
@@ -852,6 +869,13 @@ export default function App() {
         void recordInternalError("warn", [caught], "account.restore");
       });
   }, []);
+
+  useEffect(() => () => {
+    languageTransitionRun.current += 1;
+    languageSwitchProgress.stopAnimation();
+    if (accountLifecycleTimer.current) clearTimeout(accountLifecycleTimer.current);
+    if (filePreparationTimer.current) clearTimeout(filePreparationTimer.current);
+  }, [languageSwitchProgress]);
 
   useEffect(() => {
     AsyncStorage.getItem(savedSignaturesStorageKey)
@@ -874,12 +898,17 @@ export default function App() {
     trash,
     addHistory,
     clearHistory,
+    endAccountHistorySession,
     deleteHistoryJob,
     restoreTrashJob,
     deleteTrashJobForever,
     emptyTrash
-  } = useHistory();
+  } = useHistory(accountUser?.id ?? null);
   const theme = useMemo(() => getTheme(themeMode, systemScheme), [themeMode, systemScheme]);
+  const themeTransitionTheme = useMemo(
+    () => getTheme(themeTransitionTarget ?? (theme.isDark ? "dark" : "light"), systemScheme),
+    [systemScheme, theme.isDark, themeTransitionTarget]
+  );
   const t = translations[language];
   const isLandscape = width > height;
   const appUiCopy = appUiCopies[language] ?? appUiCopies.en;
@@ -890,17 +919,23 @@ export default function App() {
   const legalTabLabels = settingsDocumentTabLabels[language] ?? settingsDocumentTabLabels.en;
   const legalWebsiteCopy = legalWebsiteCopies[language] ?? legalWebsiteCopies.en;
   const quickActionSectionCopy = quickActionSectionCopies[language] ?? quickActionSectionCopies.en;
-  const localizedQuickActionItems = quickActionItems.map((item) => ({
-    ...item,
-    ...((quickActionCopies[language] ?? quickActionCopies.en)[item.action] ?? quickActionCopies.en[item.action])
-  }));
-  const quickActionPickerItem = localizedQuickActionItems.find((item) => item.action === quickActionPicker) ?? localizedQuickActionItems[0];
+  const localizedQuickActionItems = useMemo(
+    () => quickActionItems.map((item) => ({
+      ...item,
+      ...((quickActionCopies[language] ?? quickActionCopies.en)[item.action] ?? quickActionCopies.en[item.action])
+    })),
+    [language]
+  );
+  const displayedQuickActionPicker = quickActionPicker ?? lastQuickActionPicker.current;
+  const quickActionPickerItem = useMemo(
+    () => localizedQuickActionItems.find((item) => item.action === displayedQuickActionPicker) ?? localizedQuickActionItems[0],
+    [displayedQuickActionPicker, localizedQuickActionItems]
+  );
   const quickActionCanUseGallery =
-    quickActionPicker !== null &&
-    quickActionPicker !== "compressPdf" &&
-    quickActionPicker !== "exportPdf" &&
-    quickActionPicker !== "zipOpen" &&
-    quickActionPicker !== "convertUdf";
+    displayedQuickActionPicker !== "compressPdf" &&
+    displayedQuickActionPicker !== "exportPdf" &&
+    displayedQuickActionPicker !== "zipOpen" &&
+    displayedQuickActionPicker !== "convertUdf";
   const speechLocale = speechLocaleForLanguage(language);
   const availableOutputs = getAvailableOutputs(inputType);
   const selectedOutputType = availableOutputs.includes(outputType) ? outputType : availableOutputs[0];
@@ -908,14 +943,52 @@ export default function App() {
     inputRange: [0, 1],
     outputRange: ["0deg", "360deg"]
   });
-  const languageSwitchWidth = languageSwitchProgress.interpolate({
+  const prepareNoticeScale = prepareNoticeAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["8%", "100%"]
+    outputRange: [0.975, 1]
   });
+  const prepareNoticeTranslateY = prepareNoticeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [14, 0]
+  });
+  const requestThemeChange = useCallback(() => {
+    setThemeTransitionTarget((current) => current ?? (theme.isDark ? "light" : "dark"));
+  }, [theme.isDark]);
+
+  const applyThemeTransition = useCallback(() => {
+    if (themeTransitionTarget) setThemeMode(themeTransitionTarget);
+  }, [themeTransitionTarget]);
+
+  const finishThemeTransition = useCallback(() => {
+    setThemeTransitionTarget(null);
+  }, []);
 
   const closeAccountModal = () => {
     setAccountModalVisible(false);
   };
+
+  const showAccountLifecycleNotice = useCallback((event: AccountLifecycleEvent) => {
+    if (accountLifecycleTimer.current) clearTimeout(accountLifecycleTimer.current);
+    setAccountModalVisible(false);
+    setAccountLifecycleEvent(null);
+    accountLifecycleTimer.current = setTimeout(() => {
+      setAccountLifecycleEvent(event);
+      accountLifecycleTimer.current = null;
+    }, 260);
+  }, []);
+
+  const dismissAccountLifecycleNotice = useCallback(() => {
+    setAccountLifecycleEvent(null);
+  }, []);
+
+  const handleAccountSessionEnd = useCallback(async (reason: AccountSessionEndReason) => {
+    if (!accountUser) return;
+    try {
+      await endAccountHistorySession(accountUser.id, reason === "deleted");
+    } catch (caught) {
+      void recordInternalError("warn", [caught], `account.history.purge.${reason}`);
+    }
+  }, [accountUser, endAccountHistorySession]);
 
   const openSettingsDocument = (key: SettingsDocumentKey) => {
     if (settingsDocumentCloseTimer.current) {
@@ -1006,6 +1079,25 @@ export default function App() {
     }
   };
 
+  const syncAccountConversionHistory = useCallback((job: ConversionJob) => {
+    if (!accountUser) return;
+    const firstFileName = job.files[0]?.name?.trim() || "file";
+    const fileName = job.files.length > 1
+      ? `${firstFileName} +${job.files.length - 1}`.slice(0, 255)
+      : firstFileName.slice(0, 255);
+    const fileSizeBytes = job.files.reduce((total, file) => total + Math.max(0, file.size || 0), 0);
+
+    void recordConversionHistory({
+      fileName,
+      from: job.inputType.toUpperCase(),
+      to: job.outputType.toUpperCase(),
+      fileSizeBytes,
+      status: job.status === "success" ? "completed" : "failed"
+    }).catch((caught) => {
+      void recordInternalError("warn", [caught], "account.history.record");
+    });
+  }, [accountUser]);
+
   useEffect(() => {
     const subscription = Appearance.addChangeListener(() => {
       if (themeMode === "system") setThemeMode("system");
@@ -1055,7 +1147,7 @@ export default function App() {
       Animated.timing(convertSpin, {
         toValue: 1,
         duration: 900,
-        easing: Easing.linear,
+        easing: motionEasing.linear,
         useNativeDriver: true
       })
     );
@@ -1070,8 +1162,8 @@ export default function App() {
       setShowPrepareNotice(true);
       setPreparationProgress(0.12);
       progressTimer = setInterval(() => {
-        setPreparationProgress((current) => Math.min(0.92, current + 0.11));
-      }, 120);
+        setPreparationProgress((current) => Math.min(0.92, current + 0.1));
+      }, 200);
       Animated.spring(prepareNoticeAnim, {
         toValue: 1,
         useNativeDriver: true,
@@ -1087,7 +1179,7 @@ export default function App() {
     Animated.timing(prepareNoticeAnim, {
       toValue: 0,
       duration: 280,
-      easing: Easing.out(Easing.cubic),
+      easing: motionEasing.exit,
       useNativeDriver: true
     }).start(({ finished }) => {
       if (finished) setShowPrepareNotice(false);
@@ -1097,14 +1189,47 @@ export default function App() {
   }, [isPreparingSelection, prepareNoticeAnim]);
 
   useEffect(() => {
-    screenSlide.setValue(18);
-    Animated.spring(screenSlide, {
-      toValue: 0,
-      useNativeDriver: true,
-      speed: 18,
-      bounciness: 4
-    }).start();
-  }, [activeTab, screenSlide]);
+    if (!openConversionAfterPreparation || isPreparingSelection || showPrepareNotice) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled && files.length > 0) {
+        setConversionModalVisible(true);
+      }
+      setOpenConversionAfterPreparation(false);
+    }, motionDuration.quick + 80);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [files.length, isPreparingSelection, openConversionAfterPreparation, showPrepareNotice]);
+
+  useEffect(() => {
+    const order = ["convert", "archive", "history", "trash", "settings", "editor"] as const;
+    const previousIndex = order.indexOf(previousTab.current);
+    const nextIndex = order.indexOf(activeTab);
+    const direction = nextIndex >= previousIndex ? 1 : -1;
+    previousTab.current = activeTab;
+    screenSlide.setValue(direction * 28);
+    screenOpacity.setValue(0);
+    const animation = Animated.parallel([
+      Animated.timing(screenSlide, {
+        duration: motionDuration.standard,
+        easing: motionEasing.enter,
+        toValue: 0,
+        useNativeDriver: true
+      }),
+      Animated.timing(screenOpacity, {
+        duration: motionDuration.standard,
+        easing: motionEasing.standard,
+        toValue: 1,
+        useNativeDriver: true
+      })
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [activeTab, screenOpacity, screenSlide]);
 
   useEffect(() => {
     if (activeTab === "editor") return;
@@ -1164,20 +1289,23 @@ export default function App() {
 
     Alert.alert(t.fileSourceTitle, t.fileSourceBody, [
       { text: t.cancel, style: "cancel" },
-      { text: t.chooseFiles, onPress: () => void selectDocumentFiles() },
-      { text: t.chooseGallery, onPress: () => void selectGalleryMedia() }
+      { text: t.chooseFiles, onPress: () => void selectDocumentFiles(true) },
+      { text: t.chooseGallery, onPress: () => void selectGalleryMedia(true) }
     ]);
   };
 
-  const selectDocumentFiles = async () => {
+  const selectDocumentFiles = async (waitBeforeOpen = false) => {
     setError(null);
-    const result = await DocumentPicker.getDocumentAsync({
-      multiple: true,
-      copyToCacheDirectory: true,
-      type: conversionPickerMimeTypes
-    });
+    const result = await runNativeSurface(
+      () => DocumentPicker.getDocumentAsync({
+        multiple: true,
+        copyToCacheDirectory: true,
+        type: conversionPickerMimeTypes
+      }),
+      { waitBeforeOpen }
+    );
 
-    if (result.canceled) return;
+    if (!result || result.canceled) return;
 
     const selected = result.assets.map((asset) => ({
       name: asset.name,
@@ -1189,25 +1317,29 @@ export default function App() {
     applyFiles(selected);
   };
 
-  const selectGalleryMedia = async () => {
+  const selectGalleryMedia = async (waitBeforeOpen = false) => {
     setError(null);
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const permission = await requestMediaLibraryPermissionSafely(waitBeforeOpen);
+    if (!permission) return;
     if (!permission.granted) {
       Alert.alert(t.permissionTitle, t.permissionGallery);
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: true,
-      mediaTypes: ["images", "videos"],
-      orderedSelection: true,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      quality: 1,
-      selectionLimit: 0,
-      videoQuality: ImagePicker.UIImagePickerControllerQualityType.High
-    });
+    const result = await runNativeSurface(
+      () => ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: true,
+        mediaTypes: ["images", "videos"],
+        orderedSelection: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 1,
+        selectionLimit: 0,
+        videoQuality: ImagePicker.UIImagePickerControllerQualityType.High
+      }),
+      { waitBeforeOpen: permission.waitBeforePicker }
+    );
 
-    if (result.canceled) return;
+    if (!result || result.canceled) return;
 
     const selected = result.assets.map((asset, index) => {
       const extension = extensionFromGalleryAsset(asset);
@@ -1227,6 +1359,11 @@ export default function App() {
     preferredOutput?: FileType,
     options: { showPreparation?: boolean } = {}
   ) => {
+    if (filePreparationTimer.current) {
+      clearTimeout(filePreparationTimer.current);
+      filePreparationTimer.current = null;
+    }
+
     const acceptedConversionFiles = nextFiles.filter(
       (file) => routeFileForOperation(file, "convert").category !== "archive"
     );
@@ -1239,6 +1376,7 @@ export default function App() {
       setLastJob(null);
       setIsPreparingSelection(false);
       setShowPrepareNotice(false);
+      setOpenConversionAfterPreparation(false);
       setPreparationProgress(0);
       setConversionModalVisible(false);
       return;
@@ -1254,6 +1392,7 @@ export default function App() {
     }
 
     setIsPreparingSelection(shouldShowPreparation);
+    setOpenConversionAfterPreparation(shouldShowPreparation && acceptedFiles.length > 0);
     if (!shouldShowPreparation) {
       setShowPrepareNotice(false);
       setPreparationProgress(0);
@@ -1272,9 +1411,12 @@ export default function App() {
       setInputType(defaultInput);
       setOutputType(defaultOutput);
     }
-    setConversionModalVisible(acceptedFiles.length > 0);
+    setConversionModalVisible(acceptedFiles.length > 0 && !shouldShowPreparation);
     if (shouldShowPreparation) {
-      setTimeout(() => setIsPreparingSelection(false), filePreparationDisplayMs);
+      filePreparationTimer.current = setTimeout(() => {
+        setIsPreparingSelection(false);
+        filePreparationTimer.current = null;
+      }, filePreparationDisplayMs);
     }
   };
 
@@ -1311,35 +1453,37 @@ export default function App() {
 
     const selectedInputType = detectFileTypeFromFile(files[0]) ?? inputType;
     if (isGifSource(selectedInputType) && outputType === "gif") {
-      openGifTrimModal();
+      void openGifTrimModal();
       return;
     }
     void runConversion();
   };
 
-  const openGifTrimModal = () => {
+  const openGifTrimModal = async () => {
     setConversionModalVisible(false);
+    await waitForModalExit();
     setGifStartSeconds(0);
     setGifDurationSeconds(3);
     setGifVideoDuration(0);
     setGifCurrentSeconds(0);
     gifPlayer.currentTime = 0;
-    setTimeout(() => setGifTrimVisible(true), 120);
+    setGifTrimVisible(true);
   };
 
-  const confirmGifTrim = () => {
+  const confirmGifTrim = async () => {
     const durationSeconds = Math.min(3, Math.max(0.5, gifDurationSeconds));
     const maxStart = Math.max(0, gifVideoDuration - durationSeconds);
     const startSeconds = Math.min(maxStart || gifStartSeconds, Math.max(0, gifStartSeconds));
     setGifTrimVisible(false);
-    setConversionModalVisible(true);
     gifPlayer.pause();
-    void runConversion(undefined, { startSeconds, durationSeconds });
+    await waitForModalExit();
+    await runConversion(undefined, { startSeconds, durationSeconds });
   };
 
-  const closeGifTrimModal = () => {
+  const closeGifTrimModal = async () => {
     setGifTrimVisible(false);
     gifPlayer.pause();
+    await waitForModalExit();
     if (files.length > 0) setConversionModalVisible(true);
   };
 
@@ -1351,6 +1495,7 @@ export default function App() {
     const jobInput = retryJob?.inputType ?? inputType;
     const jobOutput = retryJob?.outputType ?? outputType;
     let conversionStartedAt: number | null = null;
+    let completedJobForShare: ConversionJob | null = null;
 
     setError(null);
     setProgress(0);
@@ -1371,7 +1516,7 @@ export default function App() {
       }
 
       if (isGifSource(detectedType) && jobOutput === "gif" && !gifTrim) {
-        openGifTrimModal();
+        await openGifTrimModal();
         return;
       }
 
@@ -1382,8 +1527,14 @@ export default function App() {
         throw new Error(t.errors.unsupported);
       }
 
+      if (conversionModalVisible) {
+        setConversionModalVisible(false);
+        await waitForModalExit();
+      }
+
       conversionStartedAt = Date.now();
       setIsConverting(true);
+      await waitForUiFrame();
       const startConversion = () =>
         convertFiles({
           files: jobFiles,
@@ -1408,8 +1559,8 @@ export default function App() {
 
       setLastJob(completedJob);
       await addHistory(completedJob);
-      setConversionModalVisible(false);
-      setTimeout(() => setShareConfirmJob(completedJob), 120);
+      syncAccountConversionHistory(completedJob);
+      completedJobForShare = completedJob;
     } catch (caught) {
       if (conversionStartedAt) {
         await waitForMinimumElapsed(conversionStartedAt, minimumConversionLoaderMs);
@@ -1440,14 +1591,24 @@ export default function App() {
       setError(message);
       setLastJob(failedJob);
       await addHistory(failedJob);
+      syncAccountConversionHistory(failedJob);
     } finally {
       setIsConverting(false);
+      if (conversionStartedAt) {
+        await waitForModalExit();
+        if (completedJobForShare) {
+          setShareConfirmJob(completedJobForShare);
+        } else if (jobFiles.length > 0) {
+          setConversionModalVisible(true);
+        }
+      }
     }
   };
 
   const runPdfCompression = async (file: AppFile, preset: PdfCompressionPreset = "balanced") => {
     let compressionStartedAt: number | null = null;
     let progressTimer: ReturnType<typeof setInterval> | null = null;
+    let completedJobForShare: ConversionJob | null = null;
 
     setFiles([file]);
     setInputType("pdf");
@@ -1466,9 +1627,10 @@ export default function App() {
       compressionStartedAt = Date.now();
       setIsConverting(true);
       setProgress(0.14);
+      await waitForUiFrame();
       progressTimer = setInterval(() => {
         setProgress((current) => Math.min(0.92, current + 0.07));
-      }, 180);
+      }, 260);
 
       const result = await compressPdfFile(file, preset);
       if (progressTimer) {
@@ -1491,7 +1653,8 @@ export default function App() {
 
       setLastJob(completedJob);
       await addHistory(completedJob);
-      setTimeout(() => setShareConfirmJob(completedJob), 120);
+      syncAccountConversionHistory(completedJob);
+      completedJobForShare = completedJob;
     } catch (caught) {
       if (compressionStartedAt) {
         await waitForMinimumElapsed(compressionStartedAt, minimumConversionLoaderMs);
@@ -1514,9 +1677,16 @@ export default function App() {
       setError(message);
       setLastJob(failedJob);
       await addHistory(failedJob);
+      syncAccountConversionHistory(failedJob);
     } finally {
       if (progressTimer) clearInterval(progressTimer);
       setIsConverting(false);
+      if (compressionStartedAt) {
+        await waitForModalExit();
+        if (completedJobForShare) {
+          setShareConfirmJob(completedJobForShare);
+        }
+      }
     }
   };
 
@@ -1588,43 +1758,60 @@ export default function App() {
     const job = shareConfirmJob;
     if (!job) return;
 
+    setShareConfirmJob(null);
+    await waitForModalExit();
+
     try {
       await shareOutputs(job);
-      setShareConfirmJob(null);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : t.shareUnavailableBody;
       Alert.alert(t.shareUnavailableTitle, message);
     }
   };
 
-  const changeLanguage = (nextLanguage: Language) => {
+  const changeLanguage = async (nextLanguage: Language) => {
+    const runId = languageTransitionRun.current + 1;
+    languageTransitionRun.current = runId;
+
     if (nextLanguage === language) {
       setLanguageModalVisible(false);
       return;
     }
 
     setLanguageModalVisible(false);
-    setLanguageTransitionVisible(true);
+    await waitForModalExit();
+    if (languageTransitionRun.current !== runId) return;
+
+    languageSwitchProgress.stopAnimation();
     languageSwitchProgress.setValue(0);
+    setLanguageTransitionVisible(true);
+    await waitForUiFrame();
+    if (languageTransitionRun.current !== runId) return;
+
     Animated.timing(languageSwitchProgress, {
       toValue: 1,
-      duration: 920,
-      easing: Easing.out(Easing.cubic),
+      duration: 1120,
+      easing: motionEasing.standard,
       useNativeDriver: false
     }).start();
-    setTimeout(() => {
-      setLanguage(nextLanguage);
-    }, 520);
-    setTimeout(() => setLanguageTransitionVisible(false), 980);
+
+    await waitForDelay(480);
+    if (languageTransitionRun.current !== runId) return;
+    setLanguage(nextLanguage);
+
+    await waitForDelay(700);
+    if (languageTransitionRun.current === runId) {
+      setLanguageTransitionVisible(false);
+    }
   };
 
   const openDocumentEditor = async () => {
-    const picked = await DocumentPicker.getDocumentAsync({
+    const picked = await runNativeSurface(() => DocumentPicker.getDocumentAsync({
       multiple: false,
       copyToCacheDirectory: true,
       type: ["application/pdf", "image/jpeg", "image/png", "text/plain"]
-    });
-    if (picked.canceled) return;
+    }));
+    if (!picked || picked.canceled) return;
 
     const asset = picked.assets[0];
     const file: AppFile = {
@@ -1642,6 +1829,7 @@ export default function App() {
       void scanDocumentToPdf();
       return;
     }
+    lastQuickActionPicker.current = action;
     if (action === "compressPdf") setPdfCompressionPreset("balanced");
     setQuickActionPicker(action);
   };
@@ -1659,11 +1847,13 @@ export default function App() {
 
     try {
       const scannerModule = await import("react-native-document-scanner-plugin");
-      const response = await scannerModule.default.scanDocument({
+      const response = await runNativeSurface(() => scannerModule.default.scanDocument({
         croppedImageQuality: 96,
         maxNumDocuments: 10,
         responseType: scannerModule.ResponseType.ImageFilePath
-      });
+      }));
+
+      if (!response) return;
 
       if (response.status === scannerModule.ScanDocumentResponseStatus.Cancel) return;
 
@@ -1714,13 +1904,13 @@ export default function App() {
     const action = quickActionPicker;
     if (!action) return;
     setQuickActionPicker(null);
-    await waitForModalDismiss();
-    const picked = await DocumentPicker.getDocumentAsync({
+    await waitForModalExit();
+    const picked = await runNativeSurface(() => DocumentPicker.getDocumentAsync({
       multiple: action === "createPdf" || action === "zipCreate",
       copyToCacheDirectory: true,
       type: quickActionDocumentTypes(action)
-    });
-    if (picked.canceled) return;
+    }));
+    if (!picked || picked.canceled) return;
     await handleQuickActionFiles(
       action,
       picked.assets.map((asset) => ({
@@ -1736,21 +1926,25 @@ export default function App() {
     const action = quickActionPicker;
     if (!action) return;
     setQuickActionPicker(null);
-    await waitForModalDismiss();
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    await waitForModalExit();
+    const permission = await requestMediaLibraryPermissionSafely();
+    if (!permission) return;
     if (!permission.granted) {
       Alert.alert(t.permissionTitle, t.permissionGallery);
       return;
     }
-    const picked = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: action === "createPdf" || action === "zipCreate",
-      mediaTypes: quickActionGalleryMediaTypes(action),
-      orderedSelection: true,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      quality: 1,
-      selectionLimit: action === "createPdf" || action === "zipCreate" ? 0 : 1
-    });
-    if (picked.canceled) return;
+    const picked = await runNativeSurface(
+      () => ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: action === "createPdf" || action === "zipCreate",
+        mediaTypes: quickActionGalleryMediaTypes(action),
+        orderedSelection: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 1,
+        selectionLimit: action === "createPdf" || action === "zipCreate" ? 0 : 1
+      }),
+      { waitBeforeOpen: permission.waitBeforePicker }
+    );
+    if (!picked || picked.canceled) return;
     await handleQuickActionFiles(
       action,
       picked.assets.map((asset, index) => {
@@ -1821,11 +2015,17 @@ export default function App() {
   };
 
   const openDocumentEditorFile = async (file: AppFile) => {
+    const startedAt = Date.now();
     try {
       setIsEditorBusy(true);
+      setEditorApplyProgress(0.16);
       setEditorMessage(null);
-      const info = await inspectEditableDocument(file);
-      const previewSource = await createDocumentPreviewSource(file);
+      await waitForUiFrame();
+      const [info, previewSource] = await Promise.all([
+        inspectEditableDocument(file),
+        createDocumentPreviewSource(file)
+      ]);
+      setEditorApplyProgress(0.82);
       setEditorFile(file);
       setEditorPreviewSource(previewSource);
       setEditorOutput(null);
@@ -1837,7 +2037,10 @@ export default function App() {
       setSelectedEditorLayerId(null);
       setActiveEditorTool("select");
       setActiveTab("editor");
+      await waitForMinimumElapsed(startedAt, minimumEditorOpenLoaderMs);
+      setEditorApplyProgress(1);
     } catch {
+      await waitForMinimumElapsed(startedAt, minimumEditorOpenLoaderMs);
       Alert.alert(t.documentEditor.pickFailed, t.documentEditor.unsupported);
     } finally {
       setIsEditorBusy(false);
@@ -1862,6 +2065,7 @@ export default function App() {
     if (!editorFile) return;
 
     const startedAt = Date.now();
+    let shouldShowResult = false;
     try {
       setIsEditorBusy(true);
       setEditorApplyProgress(0.18);
@@ -1892,7 +2096,7 @@ export default function App() {
       setSelectedEditorLayerId(null);
       setActiveEditorTool("select");
       setEditorMessage(t.documentEditor.ready);
-      setEditorResultModalVisible(true);
+      shouldShowResult = true;
     } catch (caught) {
       const message = caught instanceof Error && caught.message.includes("ERR_EDITOR_EMPTY")
         ? t.documentEditor.empty
@@ -1900,7 +2104,11 @@ export default function App() {
       setEditorMessage(message);
     } finally {
       setIsEditorBusy(false);
+      await waitForModalExit();
       setEditorApplyProgress(0);
+      if (shouldShowResult) {
+        setEditorResultModalVisible(true);
+      }
     }
   };
 
@@ -2027,19 +2235,23 @@ export default function App() {
   };
 
   const addImageSignatureLayer = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const permission = await requestMediaLibraryPermissionSafely();
+    if (!permission) return;
     if (!permission.granted) {
       Alert.alert(t.permissionTitle, t.permissionGallery);
       return;
     }
 
-    const picked = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: false,
-      mediaTypes: ["images"],
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      quality: 1
-    });
-    if (picked.canceled) return;
+    const picked = await runNativeSurface(
+      () => ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: false,
+        mediaTypes: ["images"],
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 1
+      }),
+      { waitBeforeOpen: permission.waitBeforePicker }
+    );
+    if (!picked || picked.canceled) return;
 
     const asset = picked.assets[0];
     const extension = extensionFromGalleryAsset(asset);
@@ -2064,19 +2276,23 @@ export default function App() {
   };
 
   const addQrSignatureLayer = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const permission = await requestMediaLibraryPermissionSafely();
+    if (!permission) return;
     if (!permission.granted) {
       Alert.alert(t.permissionTitle, t.permissionGallery);
       return;
     }
 
-    const picked = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: false,
-      mediaTypes: ["images"],
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      quality: 1
-    });
-    if (picked.canceled) return;
+    const picked = await runNativeSurface(
+      () => ImagePicker.launchImageLibraryAsync({
+        allowsMultipleSelection: false,
+        mediaTypes: ["images"],
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 1
+      }),
+      { waitBeforeOpen: permission.waitBeforePicker }
+    );
+    if (!picked || picked.canceled) return;
 
     const asset = picked.assets[0];
     const extension = extensionFromGalleryAsset(asset);
@@ -2257,11 +2473,10 @@ export default function App() {
     });
   };
 
-  const shareEditedDocumentFromModal = () => {
+  const shareEditedDocumentFromModal = async () => {
     setEditorResultModalVisible(false);
-    setTimeout(() => {
-      void shareEditedDocument();
-    }, 260);
+    await waitForModalExit();
+    await shareEditedDocument();
   };
 
   const closeDocumentEditor = () => {
@@ -2403,9 +2618,9 @@ export default function App() {
     <SafeAreaProvider>
       <SafeAreaView edges={["top", "left", "right"]} style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
         <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
-        <Modal
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="fullscreen"
           visible={isEditorBusy}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
         >
@@ -2420,7 +2635,7 @@ export default function App() {
               />
             </View>
           </View>
-        </Modal>
+        </MotionModal>
         <AccountModal
           visible={accountModalVisible}
           isLandscape={isLandscape}
@@ -2428,12 +2643,21 @@ export default function App() {
           theme={theme}
           user={accountUser}
           onUserChange={setAccountUser}
+          onLifecycleSuccess={showAccountLifecycleNotice}
+          onSessionEnd={handleAccountSessionEnd}
           onClose={closeAccountModal}
           onOpenLegal={openAccountLegalDocument}
         />
-        <Modal
+        <AccountLifecycleNotice
+          event={accountLifecycleEvent}
+          isLandscape={isLandscape}
+          language={language}
+          theme={theme}
+          onDismiss={dismissAccountLifecycleNotice}
+        />
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={settingsDocumentVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={closeSettingsDocument}
@@ -2527,10 +2751,10 @@ export default function App() {
               ) : null}
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={showInternalDiagnostics && diagnosticsVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setDiagnosticsVisible(false)}
@@ -2636,10 +2860,10 @@ export default function App() {
               </View>
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={editorResultModalVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setEditorResultModalVisible(false)}
@@ -2671,10 +2895,10 @@ export default function App() {
               </View>
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={Boolean(renameTarget)}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setRenameTarget(null)}
@@ -2719,10 +2943,10 @@ export default function App() {
               </View>
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={Boolean(shareConfirmJob)}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setShareConfirmJob(null)}
@@ -2754,10 +2978,10 @@ export default function App() {
               </View>
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="none"
+          variant="dialog"
           visible={Boolean(quickActionPicker)}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setQuickActionPicker(null)}
@@ -2773,7 +2997,7 @@ export default function App() {
               <Text style={[styles.actionModalBody, { color: theme.colors.muted }]}>
                 {quickActionPickerItem.body}
               </Text>
-              {quickActionPicker === "compressPdf" ? (
+              {displayedQuickActionPicker === "compressPdf" ? (
                 <View style={styles.compressionPresetBlock}>
                   <View>
                     <Text style={[styles.compressionPresetTitle, { color: theme.colors.text }]}>{appUiCopy.compressionTitle}</Text>
@@ -2834,10 +3058,10 @@ export default function App() {
               ) : null}
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="dialog"
           visible={languageModalVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => setLanguageModalVisible(false)}
@@ -2880,7 +3104,7 @@ export default function App() {
                           borderColor: selected ? theme.colors.primary : theme.colors.border
                         }
                       ]}
-                      onPress={() => changeLanguage(item.code)}
+                      onPress={() => void changeLanguage(item.code)}
                     >
                       <Text style={[styles.languageFlag, isLandscape && styles.languageFlagLandscape]}>{item.flag}</Text>
                       <View style={styles.languageTextWrap}>
@@ -2894,31 +3118,25 @@ export default function App() {
               </ScrollView>
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="fullscreen"
           visible={languageTransitionVisible}
+          presentationStyle="overFullScreen"
+          statusBarTranslucent
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
         >
-          <View style={[styles.languageTransitionOverlay, { backgroundColor: theme.colors.background }]}>
-            <View style={styles.languageTransitionContent}>
-              <View style={styles.languageTransitionLogo}>
-                <Image source={mainBrandVisual} style={styles.languageTransitionLogoImage} contentFit="contain" />
-              </View>
-              <Text style={[styles.languageTransitionTitle, { color: theme.colors.text }]}>{t.appKicker}</Text>
-              <Text style={[styles.languageTransitionText, { color: theme.colors.muted }]}>{t.languageChanging}</Text>
-              <View style={[styles.languageTransitionTrack, { backgroundColor: theme.colors.border }]}>
-                <Animated.View style={[styles.languageTransitionFill, { width: languageSwitchWidth }]}>
-                  <InstagramGradient theme={theme} style={styles.languageTransitionFillGradient} />
-                </Animated.View>
-              </View>
-            </View>
-          </View>
-        </Modal>
-        <Modal
+          <LanguageTransitionContent
+            progress={languageSwitchProgress}
+            subtitle={t.languageChanging}
+            theme={theme}
+            title={t.appKicker}
+          />
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="slide"
+          variant="sheet"
           visible={conversionModalVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={() => {
@@ -3008,7 +3226,7 @@ export default function App() {
 
               <ProgressBar progress={progress} theme={theme} label={t.progressLabel} />
 
-              <TouchableOpacity
+              <AnimatedPressable
                 disabled={isConverting || isPreparingSelection}
                 style={styles.convertModalButtonClip}
                 onPress={handleConvertPress}
@@ -3023,14 +3241,14 @@ export default function App() {
                     {isConverting ? `${t.converting}...` : t.convert}
                   </Text>
                 </InstagramGradient>
-              </TouchableOpacity>
+              </AnimatedPressable>
 
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="none"
+          variant="fullscreen"
           visible={showPrepareNotice}
           presentationStyle="overFullScreen"
           statusBarTranslucent
@@ -3040,7 +3258,10 @@ export default function App() {
             style={[
               styles.fullscreenLoaderOverlay,
               isLandscape && styles.fullscreenLoaderOverlayLandscape,
-              { opacity: prepareNoticeAnim }
+              {
+                opacity: prepareNoticeAnim,
+                transform: [{ translateY: prepareNoticeTranslateY }, { scale: prepareNoticeScale }]
+              }
             ]}
           >
             <View style={[styles.fullscreenLoaderWrap, isLandscape && styles.fullscreenLoaderWrapLandscape]}>
@@ -3053,10 +3274,10 @@ export default function App() {
               />
             </View>
           </Animated.View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="fade"
+          variant="fullscreen"
           visible={isConverting}
           presentationStyle="overFullScreen"
           statusBarTranslucent
@@ -3073,10 +3294,10 @@ export default function App() {
               />
             </View>
           </View>
-        </Modal>
-        <Modal
+        </MotionModal>
+        <MotionModal
           transparent
-          animationType="slide"
+          variant="sheet"
           visible={gifTrimVisible}
           supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
           onRequestClose={closeGifTrimModal}
@@ -3254,7 +3475,7 @@ export default function App() {
               </View>
             </ScrollView>
           </View>
-        </Modal>
+        </MotionModal>
         {activeTab === "editor" ? (
           <DocumentEditorScreen
             file={editorFile}
@@ -3327,6 +3548,25 @@ export default function App() {
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity
+              accessibilityLabel={appUiCopy.accountTitle}
+              accessibilityHint={accountUser ? accountUser.email : appUiCopy.accountBody}
+              style={[
+                styles.iconButton,
+                styles.profileButton,
+                { backgroundColor: accountUser ? theme.colors.primarySoft : theme.colors.surface, borderColor: theme.colors.border }
+              ]}
+              onPress={() => setAccountModalVisible(true)}
+            >
+              {accountUser ? (
+                <Text style={[styles.profileInitial, { color: theme.colors.primary }]}>
+                  {accountUser.firstName.slice(0, 1).toLocaleUpperCase(language)}
+                </Text>
+              ) : (
+                <Feather name="user" size={19} color={theme.colors.text} />
+              )}
+              {accountUser ? <View style={styles.profileStatusDot} /> : null}
+            </TouchableOpacity>
+            <TouchableOpacity
               accessibilityLabel={t.toggleLanguage}
               style={[styles.iconButton, { backgroundColor: theme.colors.surface }]}
               onPress={() => setLanguageModalVisible(true)}
@@ -3335,8 +3575,9 @@ export default function App() {
             </TouchableOpacity>
             <TouchableOpacity
               accessibilityLabel={t.toggleTheme}
+              disabled={Boolean(themeTransitionTarget)}
               style={[styles.iconButton, { backgroundColor: theme.colors.surface }]}
-              onPress={() => setThemeMode(theme.isDark ? "light" : "dark")}
+              onPress={requestThemeChange}
             >
               {theme.isDark ? (
                 <Feather name="sun" size={20} color={theme.colors.text} />
@@ -3346,7 +3587,7 @@ export default function App() {
             </TouchableOpacity>
           </View>
         </View>
-        <Animated.View style={[styles.screenPane, { transform: [{ translateX: screenSlide }] }]}>
+        <Animated.View style={[styles.screenPane, { opacity: screenOpacity, transform: [{ translateX: screenSlide }] }]}>
         {activeTab === "convert" ? (
           <View style={styles.section}>
             <View style={[styles.quickActionPanel, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
@@ -3448,8 +3689,12 @@ export default function App() {
         ) : activeTab === "history" ? (
           <HistoryList
             history={history}
+            trash={trash}
             theme={theme}
             labels={t}
+            language={language}
+            user={accountUser}
+            onOpenAccount={() => setAccountModalVisible(true)}
             onRetry={runConversion}
             onShare={shareOutputs}
             onClear={clearHistory}
@@ -3489,7 +3734,7 @@ export default function App() {
                       {new Date(job.createdAt).toLocaleString()}
                     </Text>
                   </View>
-                  {job.outputs?.length ? (
+                  {job.outputs?.length && accountUser ? (
                     <TouchableOpacity
                       style={[styles.trashIconButton, { backgroundColor: theme.colors.primarySoft }]}
                       onPress={() => shareOutputs(job)}
@@ -3533,8 +3778,9 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              disabled={Boolean(themeTransitionTarget)}
               style={[styles.settingsRow, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
-              onPress={() => setThemeMode(theme.isDark ? "light" : "dark")}
+              onPress={requestThemeChange}
             >
               <View style={[styles.settingsIcon, { backgroundColor: theme.colors.primarySoft }]}>
                 <Feather name={theme.isDark ? "sun" : "moon"} size={18} color={theme.colors.primary} />
@@ -3669,6 +3915,13 @@ export default function App() {
             }}
           </SafeAreaInsetsContext.Consumer>
         ) : null}
+        <ThemePaintTransition
+          label={themeTransitionTarget === "dark" ? t.themeDark : t.themeLight}
+          onCovered={applyThemeTransition}
+          onFinished={finishThemeTransition}
+          targetTheme={themeTransitionTheme}
+          visible={Boolean(themeTransitionTarget)}
+        />
         {showSplash ? (
           <AppSplashScreen
             opacity={splashOpacity}
@@ -3741,7 +3994,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     gap: 8,
     justifyContent: "flex-end",
-    width: 96
+    width: 148
   },
   headerTitleBlock: {
     flex: 1,
@@ -3755,6 +4008,26 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     padding: 0,
     width: 44
+  },
+  profileButton: {
+    borderRadius: 22,
+    borderWidth: 1,
+    position: "relative"
+  },
+  profileInitial: {
+    fontSize: 16,
+    fontWeight: "900"
+  },
+  profileStatusDot: {
+    backgroundColor: "#22C55E",
+    borderColor: "#FFFFFF",
+    borderRadius: 5,
+    borderWidth: 1.5,
+    bottom: 3,
+    height: 9,
+    position: "absolute",
+    right: 3,
+    width: 9
   },
   langText: {
     fontSize: 13,
@@ -3798,6 +4071,14 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     position: "relative"
   },
+  tabActiveBackdrop: {
+    borderRadius: 18,
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0
+  },
   tabText: {
     fontSize: 8.5,
     fontWeight: "900",
@@ -3805,12 +4086,16 @@ const styles = StyleSheet.create({
     minWidth: 0,
     textAlign: "center"
   },
-  tabIndicator: {
-    borderRadius: 999,
+  tabIndicatorMotion: {
     bottom: 6,
     height: 3,
     position: "absolute",
     width: 18
+  },
+  tabIndicator: {
+    borderRadius: 999,
+    height: "100%",
+    width: "100%"
   },
   section: {
     gap: 16
@@ -4842,12 +5127,34 @@ function TabButton({
   theme: ReturnType<typeof getTheme>;
   onPress: () => void;
 }) {
+  const activeProgress = useRef(new Animated.Value(active ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.timing(activeProgress, {
+      duration: motionDuration.standard,
+      easing: motionEasing.enter,
+      toValue: active ? 1 : 0,
+      useNativeDriver: true
+    }).start();
+  }, [active, activeProgress]);
+
+  const iconScale = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+  const iconTranslateY = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [0, -2] });
+  const indicatorScale = activeProgress.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] });
+
   return (
     <TouchableOpacity
-      style={[styles.tab, active && { backgroundColor: theme.colors.primarySoft }]}
+      activeOpacity={0.9}
+      style={styles.tab}
       onPress={onPress}
     >
-      <Feather name={icon} size={18} color={active ? theme.colors.primary : theme.colors.muted} />
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.tabActiveBackdrop, { backgroundColor: theme.colors.primarySoft, opacity: activeProgress }]}
+      />
+      <Animated.View style={{ transform: [{ translateY: iconTranslateY }, { scale: iconScale }] }}>
+        <Feather name={icon} size={18} color={active ? theme.colors.primary : theme.colors.muted} />
+      </Animated.View>
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
@@ -4856,7 +5163,9 @@ function TabButton({
       >
         {label}
       </Text>
-      {active ? <InstagramGradient theme={theme} style={styles.tabIndicator} /> : null}
+      <Animated.View style={[styles.tabIndicatorMotion, { opacity: activeProgress, transform: [{ scaleX: indicatorScale }] }]}>
+        <InstagramGradient theme={theme} style={styles.tabIndicator} />
+      </Animated.View>
     </TouchableOpacity>
   );
 }
@@ -4905,6 +5214,34 @@ function waitForMinimumElapsed(startedAt: number, minimumMs: number) {
   const remaining = minimumMs - (Date.now() - startedAt);
   if (remaining <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, remaining));
+}
+
+function waitForUiFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+}
+
+function waitForDelay(durationMs: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, durationMs));
+}
+
+async function requestMediaLibraryPermissionSafely(waitBeforeOpen = false) {
+  const currentPermission = await ImagePicker.getMediaLibraryPermissionsAsync();
+  if (currentPermission.granted) {
+    return { granted: true, waitBeforePicker: waitBeforeOpen };
+  }
+
+  const requestedPermission = await runNativeSurface(
+    () => ImagePicker.requestMediaLibraryPermissionsAsync(),
+    { waitBeforeOpen }
+  );
+  if (!requestedPermission) return null;
+
+  return {
+    granted: requestedPermission.granted,
+    waitBeforePicker: false
+  };
 }
 
 function timelineLeftPercent(seconds: number, duration: number) {
@@ -5058,10 +5395,6 @@ function normalizeScannedImageUri(uri: string) {
   if (uri.startsWith("file://") || uri.startsWith("content://") || uri.startsWith("ph://")) return uri;
   if (uri.startsWith("/")) return `file://${uri}`;
   return uri;
-}
-
-function waitForModalDismiss() {
-  return new Promise((resolve) => setTimeout(resolve, 240));
 }
 
 function eraseStrokeLayer(

@@ -51,6 +51,9 @@ Required backend environment variables:
 - `AUTH_SESSION_DAYS`: account session duration, from 1 to 365 days
 - `MIN_ACCOUNT_AGE`: minimum registration age, from 13 to 18
 - `TERMS_VERSION` and `PRIVACY_VERSION`: accepted legal-document versions stored with new accounts
+- `SUPPORT_TO_EMAIL`: recipient for website support requests
+- `SUPPORT_MAX_ATTACHMENT_MB`: support attachment limit, from 1 to 25 MB
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM`: SMTP delivery settings for `POST /support/requests`
 - `FFMPEG_PATH` and `FFPROBE_PATH`: optional binary overrides
 
 Production backend startup:
@@ -71,7 +74,15 @@ DATABASE_PATH="/var/lib/editio/editio.sqlite" \
 AUTH_SESSION_DAYS=30 \
 MIN_ACCOUNT_AGE=13 \
 TERMS_VERSION=2026-07-15 \
-PRIVACY_VERSION=2026-07-15 \
+PRIVACY_VERSION=2026-07-16 \
+SUPPORT_TO_EMAIL="editioapp@gmail.com" \
+SUPPORT_MAX_ATTACHMENT_MB=10 \
+SMTP_HOST="smtp.gmail.com" \
+SMTP_PORT=465 \
+SMTP_SECURE=true \
+SMTP_USER="editioapp@gmail.com" \
+SMTP_PASS="$SMTP_PASS" \
+SMTP_FROM="Editio Support <editioapp@gmail.com>" \
 npm run start:prod
 ```
 
@@ -118,7 +129,15 @@ TRUST_PROXY_HOPS=0
 AUTH_SESSION_DAYS=30
 MIN_ACCOUNT_AGE=13
 TERMS_VERSION=2026-07-15
-PRIVACY_VERSION=2026-07-15
+PRIVACY_VERSION=2026-07-16
+SUPPORT_TO_EMAIL=editioapp@gmail.com
+SUPPORT_MAX_ATTACHMENT_MB=10
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=editioapp@gmail.com
+SMTP_PASS=
+SMTP_FROM=Editio Support <editioapp@gmail.com>
 FFMPEG_PATH=
 FFPROBE_PATH=
 EOF
@@ -187,7 +206,7 @@ The iOS command requires macOS with Xcode. Android requires Android Studio, an e
 ## Production notes
 
 - PDF rendering/extraction, still-image re-encoding, and FFmpeg audio/video conversion are routed to `backend/src/services/uploadConvertService.js`.
-- Backend endpoints currently used by the app are `GET /health`, `POST /convert-file`, `POST /convert-images-to-pdf`, `POST /compress-pdf`, `GET /files/:filename`, `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`, and `DELETE /auth/account`.
+- Backend endpoints currently used by Editio are `GET /health`, `POST /convert-file`, `POST /convert-images-to-pdf`, `POST /compress-pdf`, `GET /files/:filename`, `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`, `DELETE /auth/account`, authenticated `GET/POST /conversion-history`, and the public rate-limited `POST /support/requests` website form.
 - URL-based video download flows are intentionally not included; the app only converts files selected by the user.
 - Keep large-file conversion off the UI thread. For very large media files, prefer queued background jobs and stream-based conversion.
 - Android permissions and iOS document sharing keys live in `app.json`.
@@ -198,7 +217,7 @@ The iOS command requires macOS with Xcode. Android requires Android Studio, an e
 - Build the public app with `EXPO_PUBLIC_MEDIA_API_URL` pointing to the deployed production backend, not a LAN IP or localhost.
 - Keep the backend live during App Review; conversion, PDF rendering, PDF compression, and media conversion depend on it.
 - Create a public privacy policy URL and support URL before submission. The in-app settings screen already includes privacy, terms, third-party notices, about, and open-source summaries.
-- Complete App Store Connect privacy answers from the real production build: Name, Email Address, User ID, and Other Data (date of birth) are linked to identity and used for App Functionality; no advertising or tracking is used. Selected files are processed only for requested conversion/editing flows and are not linked to the account.
+- Complete App Store Connect privacy answers from the real production build: Name, Email Address, User ID, Other Data (date of birth), and signed-in conversion metadata (file name, formats, file size, status, and date) are linked to identity and used for App Functionality; no advertising or tracking is used. Converted file contents are processed only for requested workflows and are not stored in account history.
 - Before enabling registration in production, deploy the July 15, 2026 privacy policy and terms at `https://www.editioapp.com`, mount and back up the account database volume, and update App Store Connect privacy answers.
 - Set the app as paid in App Store Connect and complete paid app agreements, tax, and banking before release.
 - Provide screenshots for required iPhone and iPad sizes, accurate metadata, and review notes explaining that users must select files they have rights to process.

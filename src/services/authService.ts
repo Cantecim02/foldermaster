@@ -12,9 +12,21 @@ export type AccountUser = {
   lastName: string;
   birthDate: string;
   email: string;
+  subscriptionStatus: "free" | "premium";
+  subscriptionExpireDate: string | null;
   termsVersion: string;
   privacyVersion: string;
   acceptedAt: string;
+  createdAt: string;
+};
+
+export type ConversionHistoryItem = {
+  id: string;
+  fileName: string;
+  from: string;
+  to: string;
+  fileSizeBytes: number;
+  status: "completed" | "failed";
   createdAt: string;
 };
 
@@ -109,6 +121,50 @@ export async function deleteAccount(password: string) {
       timeout: 20_000
     });
     await clearSessionToken();
+  } catch (error) {
+    throw normalizeAuthError(error);
+  }
+}
+
+export async function listConversionHistory(limit = 30) {
+  const token = await readSessionToken();
+  if (!token) throw new AuthApiError("AUTH_REQUIRED", "Authentication is required.");
+
+  try {
+    const response = await axios.get<{ success: true; items: ConversionHistoryItem[] }>(
+      `${getApiBaseUrl()}/conversion-history`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: Math.max(1, Math.min(100, Math.trunc(limit))) },
+        timeout: 12_000
+      }
+    );
+    return response.data.items;
+  } catch (error) {
+    throw normalizeAuthError(error);
+  }
+}
+
+export async function recordConversionHistory(input: {
+  fileName: string;
+  from: string;
+  to: string;
+  fileSizeBytes: number;
+  status: "completed" | "failed";
+}) {
+  const token = await readSessionToken();
+  if (!token) return null;
+
+  try {
+    const response = await axios.post<{ success: true; item: ConversionHistoryItem }>(
+      `${getApiBaseUrl()}/conversion-history`,
+      input,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 12_000
+      }
+    );
+    return response.data.item;
   } catch (error) {
     throw normalizeAuthError(error);
   }

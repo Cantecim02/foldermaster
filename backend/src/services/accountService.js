@@ -32,6 +32,8 @@ export async function initializeAccountStore() {
       birth_date TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_hash TEXT NOT NULL,
+      subscription_status TEXT NOT NULL DEFAULT 'free',
+      subscription_expire_date TEXT,
       terms_version TEXT NOT NULL,
       privacy_version TEXT NOT NULL,
       accepted_at TEXT NOT NULL,
@@ -50,6 +52,24 @@ export async function initializeAccountStore() {
       ON account_sessions(user_id);
     CREATE INDEX IF NOT EXISTS account_sessions_expires_at_idx
       ON account_sessions(expires_at);
+  `);
+
+  ensureColumn(database, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'free'");
+  ensureColumn(database, "users", "subscription_expire_date", "TEXT");
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS conversion_history (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      file_name TEXT NOT NULL,
+      input_format TEXT NOT NULL,
+      output_format TEXT NOT NULL,
+      file_size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS conversion_history_user_created_idx
+      ON conversion_history(user_id, created_at DESC);
   `);
 
   dummyPasswordHash = await argon2.hash(randomBytes(32), passwordHashOptions);
@@ -162,6 +182,54 @@ export async function deleteAccount({ userId, password }) {
   })();
 }
 
+export function addConversionHistory({ userId, fileName, inputFormat, outputFormat, fileSizeBytes, status }) {
+  const db = requireDatabase();
+  const item = {
+    id: randomUUID(),
+    userId,
+    fileName: fileName.trim(),
+    inputFormat: inputFormat.toUpperCase(),
+    outputFormat: outputFormat.toUpperCase(),
+    fileSizeBytes,
+    status,
+    createdAt: new Date().toISOString()
+  };
+
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO conversion_history (
+        id, user_id, file_name, input_format, output_format,
+        file_size_bytes, status, created_at
+      ) VALUES (
+        @id, @userId, @fileName, @inputFormat, @outputFormat,
+        @fileSizeBytes, @status, @createdAt
+      )
+    `).run(item);
+    db.prepare(`
+      DELETE FROM conversion_history
+      WHERE user_id = ?
+        AND id NOT IN (
+          SELECT id FROM conversion_history
+          WHERE user_id = ?
+          ORDER BY created_at DESC
+          LIMIT 200
+        )
+    `).run(userId, userId);
+  })();
+
+  return publicConversionHistoryItem(item);
+}
+
+export function listConversionHistory({ userId, limit = 30 }) {
+  return requireDatabase().prepare(`
+    SELECT id, file_name, input_format, output_format, file_size_bytes, status, created_at
+    FROM conversion_history
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(userId, limit).map(mapConversionHistoryItem);
+}
+
 function createAuthenticatedAccount(user) {
   deleteExpiredSessions();
   const token = randomBytes(32).toString("base64url");
@@ -188,6 +256,8 @@ function publicUser(user) {
     lastName: user.lastName,
     birthDate: user.birthDate,
     email: user.email,
+    subscriptionStatus: user.subscriptionStatus ?? "free",
+    subscriptionExpireDate: user.subscriptionExpireDate ?? null,
     termsVersion: user.termsVersion,
     privacyVersion: user.privacyVersion,
     acceptedAt: user.acceptedAt,
@@ -202,12 +272,44 @@ function mapUser(row) {
     lastName: row.last_name,
     birthDate: row.birth_date,
     email: row.email,
+    subscriptionStatus: row.subscription_status ?? "free",
+    subscriptionExpireDate: row.subscription_expire_date ?? null,
     termsVersion: row.terms_version,
     privacyVersion: row.privacy_version,
     acceptedAt: row.accepted_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function publicConversionHistoryItem(item) {
+  return {
+    id: item.id,
+    fileName: item.fileName,
+    from: item.inputFormat,
+    to: item.outputFormat,
+    fileSizeBytes: item.fileSizeBytes,
+    status: item.status,
+    createdAt: item.createdAt
+  };
+}
+
+function mapConversionHistoryItem(row) {
+  return publicConversionHistoryItem({
+    id: row.id,
+    fileName: row.file_name,
+    inputFormat: row.input_format,
+    outputFormat: row.output_format,
+    fileSizeBytes: row.file_size_bytes,
+    status: row.status,
+    createdAt: row.created_at
+  });
+}
+
+function ensureColumn(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) return;
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 function readBearerToken(header) {

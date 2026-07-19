@@ -6,7 +6,6 @@ import {
   Alert,
   Animated,
   InteractionManager,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
   View
 } from "react-native";
 import { translations } from "../i18n";
+import { motionDuration, motionEasing, waitForModalExit } from "../motion";
 import { AppTheme } from "../theme";
 import { AppFile, ConvertedFile } from "../types";
 import {
@@ -23,6 +23,7 @@ import {
   extractArchive
 } from "../services/archiveService";
 import { recordBreadcrumb, recordInternalError } from "../services/errorMonitor";
+import { runNativeSurface } from "../services/nativeSurfaceCoordinator";
 import {
   archivePickerMimeTypes,
   canExtractArchive,
@@ -33,6 +34,7 @@ import {
 import { ZippedOutput, addZippedOutput, listZippedOutputs, removeZippedOutput } from "../services/zippedOutputStore";
 import { ConversionLoader } from "./ConversionLoader";
 import { AnimatedPressable } from "./ui/AnimatedPressable";
+import { MotionModal } from "./ui/MotionModal";
 
 type Props = {
   labels: typeof translations.en;
@@ -40,6 +42,8 @@ type Props = {
   quickIntent?: ArchiveQuickIntent | null;
   onQuickIntentConsumed?: (id: number) => void;
 };
+
+const minimumArchiveLoaderMs = 1200;
 
 export type ArchiveQuickIntent = {
   id: number;
@@ -67,7 +71,8 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   useEffect(() => {
     Animated.timing(fade, {
       toValue: 1,
-      duration: 280,
+      duration: motionDuration.reveal,
+      easing: motionEasing.enter,
       useNativeDriver: true
     }).start();
   }, [fade]);
@@ -81,12 +86,12 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   };
 
   const pickArchive = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
+    const result = await runNativeSurface(() => DocumentPicker.getDocumentAsync({
       multiple: false,
       copyToCacheDirectory: true,
       type: archivePickerMimeTypes
-    });
-    if (result.canceled) return;
+    }));
+    if (!result || result.canceled) return;
     const asset = result.assets[0];
     const selectedArchive = {
       name: asset.name,
@@ -105,12 +110,12 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   };
 
   const pickFilesForZip = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
+    const result = await runNativeSurface(() => DocumentPicker.getDocumentAsync({
       multiple: true,
       copyToCacheDirectory: true,
       type: "*/*"
-    });
-    if (result.canceled) return;
+    }));
+    if (!result || result.canceled) return;
     setCompressFiles(
       result.assets.map((asset) => ({
         name: asset.name,
@@ -145,13 +150,19 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
     }
 
     let extractedOutputs: ExtractedArchiveFile[] | null = null;
+    let deferredErrorCode: keyof typeof translations.en.archive.errors | null = null;
+    const startedAt = Date.now();
     try {
       setIsBusy(true);
       setBusyMode("extract");
       setArchiveErrorCode(null);
       setProgress(0);
       setArchive(selectedArchive);
-      const outputs = await extractArchive(selectedArchive, setProgress);
+      await waitForUiFrame();
+      const outputs = await extractArchive(
+        selectedArchive,
+        createThrottledProgressReporter(setProgress)
+      );
       extractedOutputs = outputs;
       setExtractedResultFiles(outputs);
     } catch (caught) {
@@ -163,12 +174,17 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
           "archive.extract",
         );
       }
-      setArchiveErrorCode(errorCode);
+      deferredErrorCode = errorCode;
     } finally {
+      await waitForMinimumElapsed(startedAt, minimumArchiveLoaderMs);
+      if (extractedOutputs?.length) setProgress(1);
       setIsBusy(false);
       setBusyMode(null);
+      await waitForModalExit();
       if (extractedOutputs?.length) {
-        setTimeout(() => setExtractResultVisible(true), 120);
+        setExtractResultVisible(true);
+      } else if (deferredErrorCode) {
+        setArchiveErrorCode(deferredErrorCode);
       }
     }
   };
@@ -223,6 +239,8 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
 
   const compressSelectedFiles = async (selectedFiles: AppFile[], options?: { clearSelection?: boolean }) => {
     let createdOutput: ConvertedFile | null = null;
+    let deferredErrorCode: keyof typeof translations.en.archive.errors | null = null;
+    const startedAt = Date.now();
     try {
       setIsBusy(true);
       setBusyMode("compress");
@@ -230,7 +248,10 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
       setZipResultVisible(false);
       setProgress(0);
       await waitForUiFrame();
-      const output = await createZipArchive(selectedFiles, setProgress);
+      const output = await createZipArchive(
+        selectedFiles,
+        createThrottledProgressReporter(setProgress)
+      );
       createdOutput = output;
       setZipResultOutput(output);
       await addZippedOutput(output);
@@ -244,12 +265,17 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
         [caught, { feature: "archive", operation: "compress", files: selectedFiles.map((file) => file.name) }],
         "archive.compress",
       );
-      setArchiveErrorCode(getArchiveErrorCode(caught));
+      deferredErrorCode = getArchiveErrorCode(caught);
     } finally {
+      await waitForMinimumElapsed(startedAt, minimumArchiveLoaderMs);
+      if (createdOutput) setProgress(1);
       setIsBusy(false);
       setBusyMode(null);
+      await waitForModalExit();
       if (createdOutput) {
-        setTimeout(() => setZipResultVisible(true), 120);
+        setZipResultVisible(true);
+      } else if (deferredErrorCode) {
+        setArchiveErrorCode(deferredErrorCode);
       }
     }
   };
@@ -273,6 +299,20 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
       return;
     }
     await Sharing.shareAsync(file.uri, { mimeType: file.mimeType, dialogTitle: file.name });
+  };
+
+  const shareZipResult = async () => {
+    const output = zipResultOutput;
+    if (!output) return;
+    setZipResultVisible(false);
+    await waitForModalExit();
+    await shareFile(output);
+  };
+
+  const shareExtractedResultFile = async (file: ConvertedFile) => {
+    setExtractResultVisible(false);
+    await waitForModalExit();
+    await shareFile(file);
   };
 
   const deleteZippedOutput = async (file: ZippedOutput) => {
@@ -302,17 +342,27 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
 
   const openExtractResultModal = () => {
     if (!extractedResultFiles.length) return;
-    setExtractResultVisible(false);
-    setTimeout(() => setExtractResultVisible(true), 0);
+    setExtractResultVisible(true);
   };
 
   const archiveCanExtract = canExtractArchive(archive);
 
   return (
-    <Animated.View style={[styles.container, { opacity: fade }]}>
-      <Modal
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          opacity: fade,
+          transform: [
+            { translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) },
+            { scale: fade.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) }
+          ]
+        }
+      ]}
+    >
+      <MotionModal
         transparent
-        animationType="none"
+        variant="fullscreen"
         visible={isBusy}
         presentationStyle="overFullScreen"
         statusBarTranslucent
@@ -329,10 +379,10 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
             />
           </View>
         </View>
-      </Modal>
-      <Modal
+      </MotionModal>
+      <MotionModal
         transparent
-        animationType="fade"
+        variant="dialog"
         visible={Boolean(archiveErrorCode)}
         presentationStyle="overFullScreen"
         statusBarTranslucent
@@ -356,10 +406,10 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
             </AnimatedPressable>
           </View>
         </View>
-      </Modal>
-      <Modal
+      </MotionModal>
+      <MotionModal
         transparent
-        animationType="fade"
+        variant="dialog"
         visible={zipResultVisible && Boolean(zipResultOutput)}
         presentationStyle="overFullScreen"
         statusBarTranslucent
@@ -390,7 +440,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
                 <AnimatedPressable
                   containerStyle={styles.resultActionSlot}
                   style={[styles.resultPrimaryButton, { backgroundColor: theme.colors.primary }]}
-                  onPress={() => void shareFile(zipResultOutput)}
+                  onPress={() => void shareZipResult()}
                 >
                   <Feather name="share-2" size={16} color={theme.colors.onPrimary} />
                   <Text style={[styles.resultPrimaryText, { color: theme.colors.onPrimary }]}>{labels.share}</Text>
@@ -399,10 +449,10 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
             </View>
           </View>
         </View>
-      </Modal>
-      <Modal
+      </MotionModal>
+      <MotionModal
         transparent
-        animationType="fade"
+        variant="dialog"
         visible={extractResultVisible && extractedResultFiles.length > 0}
         presentationStyle="overFullScreen"
         statusBarTranslucent
@@ -418,7 +468,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
             <Text style={[styles.resultBody, { color: theme.colors.muted }]}>{labels.archive.extractedFiles}</Text>
             <ScrollView style={styles.resultListScroll} contentContainerStyle={styles.resultList} showsVerticalScrollIndicator={false}>
               {extractedResultFiles.map((file) => (
-                <ArchiveFileRow key={file.uri} file={file} labels={labels} theme={theme} onShare={shareFile} />
+                <ArchiveFileRow key={file.uri} file={file} labels={labels} theme={theme} onShare={shareExtractedResultFile} />
               ))}
             </ScrollView>
             <AnimatedPressable
@@ -429,7 +479,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
             </AnimatedPressable>
           </View>
         </View>
-      </Modal>
+      </MotionModal>
       <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.cardHeader}>
           <View style={[styles.iconShell, { backgroundColor: theme.colors.primarySoft }]}>
@@ -723,6 +773,23 @@ function waitForUiFrame() {
   return new Promise((resolve) => {
     requestAnimationFrame(() => setTimeout(resolve, 0));
   });
+}
+
+function waitForMinimumElapsed(startedAt: number, minimumMs: number) {
+  const remaining = minimumMs - (Date.now() - startedAt);
+  if (remaining <= 0) return Promise.resolve();
+  return new Promise<void>((resolve) => setTimeout(resolve, remaining));
+}
+
+function createThrottledProgressReporter(setProgress: (value: number) => void) {
+  let lastUpdateAt = 0;
+  return (value: number) => {
+    const now = Date.now();
+    if (value >= 1 || now - lastUpdateAt >= 100) {
+      lastUpdateAt = now;
+      setProgress(value);
+    }
+  };
 }
 
 const styles = StyleSheet.create({

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
+import { motionDuration, motionEasing } from "../../motion";
 import { AppTheme } from "../../theme";
 
 type Props = {
@@ -10,15 +11,36 @@ type Props = {
 
 export function AnimatedProgressBar({ progress, label, theme }: Props) {
   const width = useRef(new Animated.Value(0)).current;
+  const glow = useRef(new Animated.Value(0)).current;
   const clamped = Math.max(0, Math.min(1, progress));
 
   useEffect(() => {
     Animated.timing(width, {
       toValue: clamped,
-      duration: 260,
+      duration: motionDuration.reveal,
+      easing: motionEasing.standard,
       useNativeDriver: false
     }).start();
   }, [clamped, width]);
+
+  useEffect(() => {
+    const animation = Animated.sequence([
+      Animated.timing(glow, {
+        duration: motionDuration.quick,
+        easing: motionEasing.enter,
+        toValue: 1,
+        useNativeDriver: true
+      }),
+      Animated.timing(glow, {
+        duration: motionDuration.standard,
+        easing: motionEasing.exit,
+        toValue: 0,
+        useNativeDriver: true
+      })
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [clamped, glow]);
 
   return (
     <View style={styles.container}>
@@ -38,8 +60,9 @@ export function AnimatedProgressBar({ progress, label, theme }: Props) {
               })
             }
           ]}
-        >
-          <View style={[styles.fillAccent, { backgroundColor: theme.colors.accent }]} />
+          >
+            <View style={[styles.fillAccent, { backgroundColor: theme.colors.accent }]} />
+            <Animated.View style={[styles.progressGlow, { opacity: glow, transform: [{ scaleX: glow }] }]} />
         </Animated.View>
       </View>
     </View>
@@ -80,5 +103,13 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     width: 42
+  },
+  progressGlow: {
+    backgroundColor: "rgba(255,255,255,0.5)",
+    bottom: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    width: 26
   }
 });

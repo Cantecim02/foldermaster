@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   ActivityIndicator,
+  findNodeHandle,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -28,6 +29,8 @@ import { InstagramGradient } from "./ui/InstagramGradient";
 type Theme = ReturnType<typeof getTheme>;
 type AccountMode = "login" | "register";
 type LegalKey = "privacy" | "terms";
+export type AccountLifecycleEvent = "created" | "deleted";
+export type AccountSessionEndReason = "signedOut" | "deleted";
 
 type Props = {
   visible: boolean;
@@ -36,6 +39,8 @@ type Props = {
   theme: Theme;
   user: AccountUser | null;
   onUserChange: (user: AccountUser | null) => void;
+  onLifecycleSuccess: (event: AccountLifecycleEvent) => void;
+  onSessionEnd: (reason: AccountSessionEndReason) => Promise<void>;
   onClose: () => void;
   onOpenLegal: (key: LegalKey) => void;
 };
@@ -76,6 +81,10 @@ type Copy = {
   deleteWarning: string;
   deleteConfirm: string;
   cancel: string;
+  benefitsTitle: string;
+  benefits: string[];
+  historyLoginPrompt: string;
+  accountStatus: string;
 };
 
 const en: Copy = {
@@ -99,7 +108,7 @@ const en: Copy = {
   and: "and",
   privacy: "Privacy Policy",
   acceptSuffix: ".",
-  secureNotice: "Passwords are protected with a one-way hash. Selected files are not linked to your account.",
+  secureNotice: "Passwords are protected with a one-way hash. Only conversion metadata is saved; converted files are not stored in your account.",
   mismatch: "Passwords do not match.",
   acceptanceRequired: "You must accept the Terms of Use and Privacy Policy.",
   missingFields: "Complete all required fields.",
@@ -113,7 +122,16 @@ const en: Copy = {
   deleteAccount: "Delete account",
   deleteWarning: "Enter your password to permanently delete your account and active sessions.",
   deleteConfirm: "Permanently delete",
-  cancel: "Cancel"
+  cancel: "Cancel",
+  benefitsTitle: "Create your Editio account",
+  benefits: [
+    "Keep conversion records in your account",
+    "Review file name, format, status, and date in one place",
+    "Access your account history again after signing back in",
+    "View your conversion records on devices signed in to the same account"
+  ],
+  historyLoginPrompt: "Sign in to keep and view your conversion history.",
+  accountStatus: "Active account"
 };
 
 const copies: Record<Language, Copy> = {
@@ -123,34 +141,42 @@ const copies: Record<Language, Copy> = {
     title: "Editio hesabı", subtitle: "Güvenli biçimde oturum açın veya hesap oluşturun.", login: "Oturum aç", register: "Hesap oluştur",
     firstName: "Ad", lastName: "Soyad", birthDate: "Doğum tarihi", birthHint: "YYYY/AA/GG", chooseDate: "Tarih seç", datePickerTitle: "Doğum tarihinizi seçin", done: "Bitti", email: "E-posta", password: "Şifre", confirmPassword: "Şifreyi tekrar girin",
     passwordHint: "En az 10 karakter; büyük harf, küçük harf ve sayı içermeli.", acceptPrefix: "Okudum ve", terms: "Kullanım Koşulları", and: "ile", privacy: "Gizlilik Politikası", acceptSuffix: "metinlerini kabul ediyorum.",
-    secureNotice: "Şifreler tek yönlü hash ile korunur. Seçtiğiniz dosyalar hesabınızla ilişkilendirilmez.", mismatch: "Şifreler eşleşmiyor.", acceptanceRequired: "Kullanım Koşulları ve Gizlilik Politikası'nı kabul etmelisiniz.",
+    secureNotice: "Şifreler tek yönlü hash ile korunur. Yalnızca dönüşüm bilgileri kaydedilir; dönüştürülen dosyalar hesabınızda saklanmaz.", mismatch: "Şifreler eşleşmiyor.", acceptanceRequired: "Kullanım Koşulları ve Gizlilik Politikası'nı kabul etmelisiniz.",
     missingFields: "Tüm zorunlu alanları doldurun.", invalidBirthDate: "Doğum tarihini YYYY/AA/GG biçiminde girin.", accountExists: "Bu e-posta adresiyle zaten bir hesap var.", invalidCredentials: "E-posta adresi veya şifre hatalı.",
     networkError: "Hesap servisine şu anda ulaşılamıyor. Lütfen yeniden deneyin.", genericError: "Hesap işlemi tamamlanamadı.", signedInAs: "Oturum açılan hesap", signOut: "Çıkış yap", deleteAccount: "Hesabı sil",
-    deleteWarning: "Hesabınızı ve aktif oturumlarınızı kalıcı olarak silmek için şifrenizi girin.", deleteConfirm: "Kalıcı olarak sil", cancel: "Vazgeç"
+    deleteWarning: "Hesabınızı ve aktif oturumlarınızı kalıcı olarak silmek için şifrenizi girin.", deleteConfirm: "Kalıcı olarak sil", cancel: "Vazgeç",
+    benefitsTitle: "Editio hesabı oluşturun",
+    benefits: ["Dönüşüm kayıtlarınızı hesabınızda saklayın", "Dosya adı, format, durum ve tarih bilgilerini tek yerde görün", "Çıkış yapıp yeniden girdiğinizde hesap geçmişinize erişin", "Aynı hesapla giriş yaptığınız cihazlarda dönüşüm kayıtlarınızı görüntüleyin"],
+    historyLoginPrompt: "Geçmişinizi kaydetmek ve görmek için giriş yapın.", accountStatus: "Aktif hesap"
   },
   zh: {
     ...en, title: "Editio 帐户", subtitle: "安全登录或创建帐户。", login: "登录", register: "创建帐户", firstName: "名字", lastName: "姓氏", birthDate: "出生日期", email: "电子邮件", password: "密码", confirmPassword: "再次输入密码",
-    acceptPrefix: "我已阅读并接受", terms: "使用条款", and: "和", privacy: "隐私政策", acceptSuffix: "。", signedInAs: "已登录", signOut: "退出登录", deleteAccount: "删除帐户", deleteConfirm: "永久删除", cancel: "取消"
+    acceptPrefix: "我已阅读并接受", terms: "使用条款", and: "和", privacy: "隐私政策", acceptSuffix: "。", signedInAs: "已登录", signOut: "退出登录", deleteAccount: "删除帐户", deleteConfirm: "永久删除", cancel: "取消",
+    benefitsTitle: "创建 Editio 帐户", benefits: ["将转换记录保存在您的帐户中", "集中查看文件名、格式、状态和日期", "重新登录后继续访问帐户历史记录", "在登录同一帐户的设备上查看转换记录"], historyLoginPrompt: "登录后可保存并查看转换历史。", accountStatus: "帐户已启用"
   },
   fr: {
     ...en, title: "Compte Editio", subtitle: "Connectez-vous ou créez un compte sécurisé.", login: "Connexion", register: "Créer un compte", firstName: "Prénom", lastName: "Nom", birthDate: "Date de naissance", email: "E-mail", password: "Mot de passe", confirmPassword: "Répéter le mot de passe",
-    acceptPrefix: "J'ai lu et j'accepte les", terms: "Conditions d'utilisation", and: "et la", privacy: "Politique de confidentialité", acceptSuffix: ".", signedInAs: "Connecté en tant que", signOut: "Déconnexion", deleteAccount: "Supprimer le compte", deleteConfirm: "Supprimer définitivement", cancel: "Annuler"
+    acceptPrefix: "J'ai lu et j'accepte les", terms: "Conditions d'utilisation", and: "et la", privacy: "Politique de confidentialité", acceptSuffix: ".", signedInAs: "Connecté en tant que", signOut: "Déconnexion", deleteAccount: "Supprimer le compte", deleteConfirm: "Supprimer définitivement", cancel: "Annuler",
+    benefitsTitle: "Créez votre compte Editio", benefits: ["Conservez vos conversions dans votre compte", "Consultez le nom, le format, l’état et la date au même endroit", "Retrouvez l’historique de votre compte après reconnexion", "Affichez vos conversions sur les appareils connectés au même compte"], historyLoginPrompt: "Connectez-vous pour enregistrer et voir votre historique.", accountStatus: "Compte actif"
   },
   ru: {
     ...en, title: "Аккаунт Editio", subtitle: "Безопасно войдите или создайте аккаунт.", login: "Войти", register: "Создать аккаунт", firstName: "Имя", lastName: "Фамилия", birthDate: "Дата рождения", email: "Эл. почта", password: "Пароль", confirmPassword: "Повторите пароль",
-    acceptPrefix: "Я прочитал и принимаю", terms: "Условия использования", and: "и", privacy: "Политику конфиденциальности", acceptSuffix: ".", signedInAs: "Выполнен вход", signOut: "Выйти", deleteAccount: "Удалить аккаунт", deleteConfirm: "Удалить навсегда", cancel: "Отмена"
+    acceptPrefix: "Я прочитал и принимаю", terms: "Условия использования", and: "и", privacy: "Политику конфиденциальности", acceptSuffix: ".", signedInAs: "Выполнен вход", signOut: "Выйти", deleteAccount: "Удалить аккаунт", deleteConfirm: "Удалить навсегда", cancel: "Отмена",
+    benefitsTitle: "Создайте аккаунт Editio", benefits: ["Храните записи конвертаций в аккаунте", "Просматривайте имя файла, формат, статус и дату в одном месте", "Получайте доступ к истории после повторного входа", "Просматривайте записи на устройствах с тем же аккаунтом"], historyLoginPrompt: "Войдите, чтобы сохранять и просматривать историю.", accountStatus: "Аккаунт активен"
   },
   de: {
     ...en, title: "Editio-Konto", subtitle: "Sicher anmelden oder ein Konto erstellen.", login: "Anmelden", register: "Konto erstellen", firstName: "Vorname", lastName: "Nachname", birthDate: "Geburtsdatum", email: "E-Mail", password: "Passwort", confirmPassword: "Passwort wiederholen",
-    acceptPrefix: "Ich habe die", terms: "Nutzungsbedingungen", and: "und die", privacy: "Datenschutzerklärung", acceptSuffix: "gelesen und akzeptiere sie.", signedInAs: "Angemeldet als", signOut: "Abmelden", deleteAccount: "Konto löschen", deleteConfirm: "Dauerhaft löschen", cancel: "Abbrechen"
+    acceptPrefix: "Ich habe die", terms: "Nutzungsbedingungen", and: "und die", privacy: "Datenschutzerklärung", acceptSuffix: "gelesen und akzeptiere sie.", signedInAs: "Angemeldet als", signOut: "Abmelden", deleteAccount: "Konto löschen", deleteConfirm: "Dauerhaft löschen", cancel: "Abbrechen",
+    benefitsTitle: "Editio-Konto erstellen", benefits: ["Konvertierungseinträge im Konto speichern", "Dateiname, Format, Status und Datum zentral ansehen", "Nach erneuter Anmeldung wieder auf den Kontoverlauf zugreifen", "Einträge auf Geräten mit demselben Konto ansehen"], historyLoginPrompt: "Melden Sie sich an, um Ihren Verlauf zu speichern und anzusehen.", accountStatus: "Aktives Konto"
   },
   es: {
     ...en, title: "Cuenta Editio", subtitle: "Inicia sesión o crea una cuenta segura.", login: "Iniciar sesión", register: "Crear cuenta", firstName: "Nombre", lastName: "Apellido", birthDate: "Fecha de nacimiento", email: "Correo", password: "Contraseña", confirmPassword: "Repetir contraseña",
-    acceptPrefix: "He leído y acepto los", terms: "Términos de uso", and: "y la", privacy: "Política de privacidad", acceptSuffix: ".", signedInAs: "Sesión iniciada como", signOut: "Cerrar sesión", deleteAccount: "Eliminar cuenta", deleteConfirm: "Eliminar permanentemente", cancel: "Cancelar"
+    acceptPrefix: "He leído y acepto los", terms: "Términos de uso", and: "y la", privacy: "Política de privacidad", acceptSuffix: ".", signedInAs: "Sesión iniciada como", signOut: "Cerrar sesión", deleteAccount: "Eliminar cuenta", deleteConfirm: "Eliminar permanentemente", cancel: "Cancelar",
+    benefitsTitle: "Crea tu cuenta Editio", benefits: ["Guarda los registros de conversión en tu cuenta", "Consulta nombre, formato, estado y fecha en un solo lugar", "Recupera el historial de tu cuenta al volver a iniciar sesión", "Consulta tus registros en dispositivos con la misma cuenta"], historyLoginPrompt: "Inicia sesión para guardar y ver tu historial.", accountStatus: "Cuenta activa"
   }
 };
 
-export function AccountModal({ visible, isLandscape, language, theme, user, onUserChange, onClose, onOpenLegal }: Props) {
+export function AccountModal({ visible, isLandscape, language, theme, user, onUserChange, onLifecycleSuccess, onSessionEnd, onClose, onOpenLegal }: Props) {
   const copy = copies[language] ?? en;
   const [mode, setMode] = useState<AccountMode>("login");
   const [firstName, setFirstName] = useState("");
@@ -166,10 +192,33 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const formScrollRef = useRef<ScrollView>(null);
+  const firstNameRef = useRef<TextInput>(null);
+  const lastNameRef = useRef<TextInput>(null);
+  const birthDateRef = useRef<TextInput>(null);
+  const emailRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmPasswordRef = useRef<TextInput>(null);
   const borderColor = theme.isDark ? theme.colors.border : "#C7C9D1";
   const fieldColor = theme.colors.surfaceAlt;
 
   const displayName = useMemo(() => user ? `${user.firstName} ${user.lastName}`.trim() : "", [user]);
+
+  const revealInput = (inputRef: RefObject<TextInput | null>) => {
+    const delay = Platform.OS === "ios" ? 140 : 80;
+    setTimeout(() => {
+      const inputHandle = findNodeHandle(inputRef.current);
+      if (!inputHandle) return;
+      formScrollRef.current
+        ?.getScrollResponder()
+        ?.scrollResponderScrollNativeHandleToKeyboard(inputHandle, 112, true);
+    }, delay);
+  };
+
+  const focusInput = (inputRef: RefObject<TextInput | null>) => {
+    inputRef.current?.focus();
+    revealInput(inputRef);
+  };
 
   useEffect(() => {
     if (!visible) {
@@ -211,6 +260,14 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
       setPassword("");
       setConfirmPassword("");
       setError(null);
+      if (mode === "register") {
+        setFirstName("");
+        setLastName("");
+        setBirthDate("");
+        setEmail("");
+        setAcceptedTerms(false);
+        onLifecycleSuccess("created");
+      }
     } catch (caught) {
       setError(errorMessage(caught, copy));
     } finally {
@@ -223,6 +280,7 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
     setError(null);
     try {
       await logoutAccount();
+      await onSessionEnd("signedOut");
       onUserChange(null);
     } catch (caught) {
       setError(errorMessage(caught, copy));
@@ -240,9 +298,17 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
     setError(null);
     try {
       await deleteAccount(password);
+      await onSessionEnd("deleted");
       onUserChange(null);
+      setFirstName("");
+      setLastName("");
+      setBirthDate("");
+      setEmail("");
       setPassword("");
+      setConfirmPassword("");
+      setAcceptedTerms(false);
       setDeleting(false);
+      onLifecycleSuccess("deleted");
     } catch (caught) {
       setError(errorMessage(caught, copy));
     } finally {
@@ -259,6 +325,7 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
     setBirthDate(formatDisplayDate(pendingBirthDate));
     setBirthDatePickerVisible(false);
     setError(null);
+    setTimeout(() => focusInput(emailRef), 240);
   };
 
   return (
@@ -278,7 +345,14 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <ScrollView
+            ref={formScrollRef}
+            style={styles.scroll}
+            contentContainerStyle={styles.content}
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             {user ? (
               <View style={styles.signedIn}>
                 <View style={[styles.avatar, { backgroundColor: theme.colors.primarySoft }]}>
@@ -287,6 +361,10 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
                 <Text style={[styles.signedLabel, { color: theme.colors.muted }]}>{copy.signedInAs}</Text>
                 <Text style={[styles.signedName, { color: theme.colors.text }]}>{displayName}</Text>
                 <Text style={[styles.signedEmail, { color: theme.colors.muted }]}>{user.email}</Text>
+                <View style={[styles.planBadge, { backgroundColor: theme.colors.accentSoft }]}>
+                  <Feather name="star" size={13} color={theme.colors.accent} />
+                  <Text style={[styles.planBadgeText, { color: theme.colors.accent }]}>{copy.accountStatus}</Text>
+                </View>
                 {!deleting ? (
                   <>
                     <TouchableOpacity disabled={busy} style={[styles.secondaryButton, { borderColor }]} onPress={() => void signOut()}>
@@ -314,6 +392,19 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
               </View>
             ) : (
               <>
+                <View style={[styles.benefits, { backgroundColor: theme.colors.primarySoft, borderColor: theme.colors.primary }]}>
+                  <View style={styles.benefitsTitleRow}>
+                    <Feather name="award" size={17} color={theme.colors.primary} />
+                    <Text style={[styles.benefitsTitle, { color: theme.colors.text }]}>{copy.benefitsTitle}</Text>
+                  </View>
+                  {copy.benefits.map((benefit) => (
+                    <View key={benefit} style={styles.benefitRow}>
+                      <Feather name="check-circle" size={15} color={theme.colors.primary} />
+                      <Text style={[styles.benefitText, { color: theme.colors.muted }]}>{benefit}</Text>
+                    </View>
+                  ))}
+                  <Text style={[styles.historyLoginPrompt, { color: theme.colors.text }]}>{copy.historyLoginPrompt}</Text>
+                </View>
                 <View style={[styles.modeSwitch, { backgroundColor: fieldColor }]}>
                   {(["login", "register"] as AccountMode[]).map((item) => (
                     <TouchableOpacity key={item} style={[styles.modeButton, mode === item && { backgroundColor: theme.colors.primarySoft }]} onPress={() => { setMode(item); setError(null); }}>
@@ -325,13 +416,37 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
                 {mode === "register" ? (
                   <>
                     <View style={[styles.nameRow, !isLandscape && styles.nameRowPortrait]}>
-                      <AccountInput value={firstName} onChangeText={setFirstName} placeholder={copy.firstName} theme={theme} borderColor={borderColor} />
-                      <AccountInput value={lastName} onChangeText={setLastName} placeholder={copy.lastName} theme={theme} borderColor={borderColor} />
+                      <AccountInput
+                        inputRef={firstNameRef}
+                        value={firstName}
+                        onChangeText={setFirstName}
+                        onFocus={() => revealInput(firstNameRef)}
+                        onSubmitEditing={() => focusInput(lastNameRef)}
+                        returnKeyType="next"
+                        blurOnSubmit={false}
+                        placeholder={copy.firstName}
+                        theme={theme}
+                        borderColor={borderColor}
+                      />
+                      <AccountInput
+                        inputRef={lastNameRef}
+                        value={lastName}
+                        onChangeText={setLastName}
+                        onFocus={() => revealInput(lastNameRef)}
+                        onSubmitEditing={() => focusInput(birthDateRef)}
+                        returnKeyType="next"
+                        blurOnSubmit={false}
+                        placeholder={copy.lastName}
+                        theme={theme}
+                        borderColor={borderColor}
+                      />
                     </View>
                     <View style={[styles.birthDateRow, { backgroundColor: theme.colors.surfaceAlt, borderColor }]}>
                       <TextInput
+                        ref={birthDateRef}
                         accessibilityLabel={copy.birthDate}
                         autoCorrect={false}
+                        blurOnSubmit={false}
                         inputMode="numeric"
                         keyboardType="number-pad"
                         maxLength={10}
@@ -340,8 +455,11 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
                           if (parsed) setBirthDate(formatDisplayDate(parsed));
                         }}
                         onChangeText={(value) => setBirthDate(maskBirthDateInput(value))}
+                        onFocus={() => revealInput(birthDateRef)}
+                        onSubmitEditing={() => focusInput(emailRef)}
                         placeholder={`${copy.birthDate} · ${copy.birthHint}`}
                         placeholderTextColor={theme.colors.muted}
+                        returnKeyType="next"
                         style={[styles.birthDateInput, { color: theme.colors.text }]}
                         value={birthDate}
                       />
@@ -352,11 +470,48 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
                   </>
                 ) : null}
 
-                <AccountInput value={email} onChangeText={setEmail} placeholder={copy.email} keyboardType="email-address" autoCapitalize="none" theme={theme} borderColor={borderColor} />
-                <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggle={() => setPasswordVisible((current) => !current)} placeholder={copy.password} theme={theme} borderColor={borderColor} />
+                <AccountInput
+                  inputRef={emailRef}
+                  value={email}
+                  onChangeText={setEmail}
+                  onFocus={() => revealInput(emailRef)}
+                  onSubmitEditing={() => focusInput(passwordRef)}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  placeholder={copy.email}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  theme={theme}
+                  borderColor={borderColor}
+                />
+                <PasswordField
+                  inputRef={passwordRef}
+                  value={password}
+                  onChangeText={setPassword}
+                  onFocus={() => revealInput(passwordRef)}
+                  onSubmitEditing={() => mode === "register" ? focusInput(confirmPasswordRef) : void submit()}
+                  returnKeyType={mode === "register" ? "next" : "done"}
+                  visible={passwordVisible}
+                  onToggle={() => setPasswordVisible((current) => !current)}
+                  placeholder={copy.password}
+                  theme={theme}
+                  borderColor={borderColor}
+                />
                 {mode === "register" ? (
                   <>
-                    <PasswordField value={confirmPassword} onChangeText={setConfirmPassword} visible={passwordVisible} onToggle={() => setPasswordVisible((current) => !current)} placeholder={copy.confirmPassword} theme={theme} borderColor={borderColor} />
+                    <PasswordField
+                      inputRef={confirmPasswordRef}
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      onFocus={() => revealInput(confirmPasswordRef)}
+                      onSubmitEditing={() => void submit()}
+                      returnKeyType="done"
+                      visible={passwordVisible}
+                      onToggle={() => setPasswordVisible((current) => !current)}
+                      placeholder={copy.confirmPassword}
+                      theme={theme}
+                      borderColor={borderColor}
+                    />
                     <Text style={[styles.hint, { color: theme.colors.muted }]}>{copy.passwordHint}</Text>
                     <View style={styles.acceptRow}>
                       <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: acceptedTerms }} style={[styles.checkbox, { borderColor: acceptedTerms ? theme.colors.primary : borderColor, backgroundColor: acceptedTerms ? theme.colors.primary : "transparent" }]} onPress={() => setAcceptedTerms((current) => !current)}>
@@ -474,14 +629,52 @@ function maximumBirthDate() {
   return date;
 }
 
-function AccountInput({ theme, borderColor, ...props }: React.ComponentProps<typeof TextInput> & { theme: Theme; borderColor: string }) {
-  return <TextInput {...props} autoCorrect={false} placeholderTextColor={theme.colors.muted} style={[styles.input, { color: theme.colors.text, backgroundColor: theme.colors.surfaceAlt, borderColor }]} />;
+function AccountInput({ inputRef, theme, borderColor, ...props }: React.ComponentProps<typeof TextInput> & { inputRef?: RefObject<TextInput | null>; theme: Theme; borderColor: string }) {
+  return <TextInput ref={inputRef} {...props} autoCorrect={false} placeholderTextColor={theme.colors.muted} style={[styles.input, { color: theme.colors.text, backgroundColor: theme.colors.surfaceAlt, borderColor }]} />;
 }
 
-function PasswordField({ value, onChangeText, visible, onToggle, placeholder, theme, borderColor }: { value: string; onChangeText: (value: string) => void; visible: boolean; onToggle: () => void; placeholder: string; theme: Theme; borderColor: string }) {
+function PasswordField({
+  inputRef,
+  value,
+  onChangeText,
+  onFocus,
+  onSubmitEditing,
+  returnKeyType,
+  visible,
+  onToggle,
+  placeholder,
+  theme,
+  borderColor
+}: {
+  inputRef?: RefObject<TextInput | null>;
+  value: string;
+  onChangeText: (value: string) => void;
+  onFocus?: () => void;
+  onSubmitEditing?: React.ComponentProps<typeof TextInput>["onSubmitEditing"];
+  returnKeyType?: React.ComponentProps<typeof TextInput>["returnKeyType"];
+  visible: boolean;
+  onToggle: () => void;
+  placeholder: string;
+  theme: Theme;
+  borderColor: string;
+}) {
   return (
     <View style={[styles.passwordRow, { backgroundColor: theme.colors.surfaceAlt, borderColor }]}>
-      <TextInput autoCapitalize="none" autoCorrect={false} secureTextEntry={!visible} value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={theme.colors.muted} style={[styles.passwordInput, { color: theme.colors.text }]} />
+      <TextInput
+        ref={inputRef}
+        autoCapitalize="none"
+        autoCorrect={false}
+        blurOnSubmit={returnKeyType === "done"}
+        onFocus={onFocus}
+        onSubmitEditing={onSubmitEditing}
+        returnKeyType={returnKeyType}
+        secureTextEntry={!visible}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={theme.colors.muted}
+        style={[styles.passwordInput, { color: theme.colors.text }]}
+      />
       <TouchableOpacity accessibilityLabel={visible ? "Hide password" : "Show password"} style={styles.passwordToggle} onPress={onToggle}>
         <Feather name={visible ? "eye-off" : "eye"} size={18} color={theme.colors.muted} />
       </TouchableOpacity>
@@ -548,6 +741,14 @@ const styles = StyleSheet.create({
   signedLabel: { fontSize: 11, fontWeight: "800" },
   signedName: { fontSize: 18, fontWeight: "900" },
   signedEmail: { fontSize: 13, fontWeight: "700" },
+  planBadge: { alignItems: "center", borderRadius: 999, flexDirection: "row", gap: 5, paddingHorizontal: 10, paddingVertical: 5 },
+  planBadgeText: { fontSize: 11, fontWeight: "900" },
+  benefits: { borderRadius: 16, borderWidth: 1, gap: 9, padding: 14 },
+  benefitsTitleRow: { alignItems: "center", flexDirection: "row", gap: 8 },
+  benefitsTitle: { flex: 1, fontSize: 14, fontWeight: "900" },
+  benefitRow: { alignItems: "center", flexDirection: "row", gap: 8 },
+  benefitText: { flex: 1, fontSize: 12, fontWeight: "700", lineHeight: 17 },
+  historyLoginPrompt: { fontSize: 11, fontWeight: "800", lineHeight: 16, marginTop: 2 },
   secondaryButton: { alignItems: "center", borderRadius: 13, borderWidth: 1, flexDirection: "row", gap: 8, justifyContent: "center", marginTop: 8, minHeight: 46, width: "100%" },
   secondaryButtonText: { fontSize: 13, fontWeight: "900" },
   dangerLink: { padding: 10 },

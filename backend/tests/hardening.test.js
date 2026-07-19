@@ -16,6 +16,94 @@ const tinyPng = Buffer.from(
   "base64"
 );
 
+test("support request is delivered through the configured mail transport", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/support/requests`, {
+      method: "POST",
+      body: makeSupportForm()
+    });
+    const body = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(body.success, true);
+    assert.equal(typeof body.requestId, "string");
+  }, {
+    SMTP_JSON_TRANSPORT: "true",
+    SUPPORT_TO_EMAIL: "editioapp@gmail.com"
+  });
+});
+
+test("support request accepts a validated image attachment", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await uploadFile(baseUrl, "/support/requests", {
+      field: "attachment",
+      bytes: tinyPng,
+      filename: "support-screen.png",
+      type: "image/png",
+      fields: supportFields()
+    });
+    const body = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(body.success, true);
+  }, {
+    SMTP_JSON_TRANSPORT: "true",
+    SUPPORT_TO_EMAIL: "editioapp@gmail.com"
+  });
+});
+
+test("support request rejects attachment content that does not match its extension", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await uploadFile(baseUrl, "/support/requests", {
+      field: "attachment",
+      bytes: Buffer.from("not a real image"),
+      filename: "fake.png",
+      type: "image/png",
+      fields: supportFields()
+    });
+    const body = await response.json();
+    assert.equal(response.status, 415);
+    assert.equal(body.code, "INVALID_ATTACHMENT_CONTENT");
+  }, {
+    SMTP_JSON_TRANSPORT: "true"
+  });
+});
+
+test("support request enforces its attachment size limit", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await uploadFile(baseUrl, "/support/requests", {
+      field: "attachment",
+      bytes: Buffer.alloc(1024 * 1024 + 1, 65),
+      filename: "oversized.txt",
+      type: "text/plain",
+      fields: supportFields()
+    });
+    const body = await response.json();
+    assert.equal(response.status, 413);
+    assert.equal(body.code, "FILE_TOO_LARGE");
+  }, {
+    SMTP_JSON_TRANSPORT: "true",
+    SUPPORT_MAX_ATTACHMENT_MB: "1"
+  });
+});
+
+test("support request reports unavailable mail configuration without exposing details", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/support/requests`, {
+      method: "POST",
+      body: makeSupportForm()
+    });
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.code, "SUPPORT_UNAVAILABLE");
+    assert.equal("stack" in body, false);
+  }, {
+    SMTP_JSON_TRANSPORT: "false",
+    SMTP_HOST: "",
+    SMTP_USER: "",
+    SMTP_PASS: "",
+    SMTP_FROM: ""
+  });
+});
+
 test("valid PDF content is accepted for PDF to UDF", async () => {
   await withServer(async ({ baseUrl }) => {
     const response = await uploadFile(baseUrl, "/convert-file", {
@@ -288,6 +376,21 @@ async function uploadFile(baseUrl, endpoint, { field, bytes, filename, type, fie
     form.append(key, value);
   }
   return fetch(`${baseUrl}${endpoint}`, { method: "POST", body: form });
+}
+
+function makeSupportForm() {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(supportFields())) form.append(key, value);
+  return form;
+}
+
+function supportFields() {
+  return {
+    fullName: "Editio Test User",
+    email: "test@example.com",
+    subject: "Conversion support request",
+    description: "The conversion stopped while preparing the selected document."
+  };
 }
 
 async function makePdfBytes() {

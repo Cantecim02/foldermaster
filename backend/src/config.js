@@ -30,6 +30,14 @@ function readCsv(name, fallback = "") {
     .filter(Boolean);
 }
 
+function readBoolean(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(raw.toLowerCase())) return false;
+  throw new Error(`${name} must be true or false.`);
+}
+
 function normalizeBaseUrl(value) {
   if (!value) {
     if (isProduction) {
@@ -87,7 +95,16 @@ export const config = {
   authSessionDays: readNumber("AUTH_SESSION_DAYS", 30, { min: 1, max: 365 }),
   minAccountAge: readNumber("MIN_ACCOUNT_AGE", 13, { min: 13, max: 18 }),
   termsVersion: process.env.TERMS_VERSION?.trim() || "2026-07-15",
-  privacyVersion: process.env.PRIVACY_VERSION?.trim() || "2026-07-15",
+  privacyVersion: process.env.PRIVACY_VERSION?.trim() || "2026-07-16",
+  supportRecipientEmail: process.env.SUPPORT_TO_EMAIL?.trim() || "editioapp@gmail.com",
+  supportMaxAttachmentBytes: readNumber("SUPPORT_MAX_ATTACHMENT_MB", 10, { min: 1, max: 25 }) * 1024 * 1024,
+  smtpHost: process.env.SMTP_HOST?.trim() || "",
+  smtpPort: readNumber("SMTP_PORT", 587, { min: 1, max: 65535 }),
+  smtpSecure: readBoolean("SMTP_SECURE", false),
+  smtpUser: process.env.SMTP_USER?.trim() || "",
+  smtpPass: process.env.SMTP_PASS || "",
+  smtpFrom: process.env.SMTP_FROM?.trim() || "",
+  smtpJsonTransport: !isProduction && readBoolean("SMTP_JSON_TRANSPORT", false),
   ffmpegPath: process.env.FFMPEG_PATH?.trim() || bundledFfmpegPath || "ffmpeg",
   ffprobePath: process.env.FFPROBE_PATH?.trim() || bundledFfprobePath || "ffprobe"
 };

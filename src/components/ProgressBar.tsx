@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
+import { motionDuration, motionEasing } from "../motion";
 import { AppTheme } from "../theme";
 import { InstagramGradient } from "./ui/InstagramGradient";
 
@@ -12,19 +13,43 @@ type Props = {
 export function ProgressBar({ progress, label, theme }: Props) {
   const percent = Math.round(progress * 100);
   const fill = useRef(new Animated.Value(0)).current;
+  const shimmer = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(fill, {
       toValue: Math.max(0, Math.min(1, progress)),
-      duration: 260,
+      duration: motionDuration.reveal,
+      easing: motionEasing.standard,
       useNativeDriver: false
     }).start();
   }, [fill, progress]);
+
+  useEffect(() => {
+    if (progress <= 0 || progress >= 1) {
+      shimmer.stopAnimation();
+      shimmer.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, {
+          duration: 1100,
+          easing: motionEasing.standard,
+          toValue: 1,
+          useNativeDriver: true
+        }),
+        Animated.delay(320)
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [progress, shimmer]);
 
   const width = fill.interpolate({
     inputRange: [0, 1],
     outputRange: ["0%", "100%"]
   });
+  const shimmerX = shimmer.interpolate({ inputRange: [0, 1], outputRange: [-54, 360] });
 
   return (
     <View style={styles.container}>
@@ -40,6 +65,7 @@ export function ProgressBar({ progress, label, theme }: Props) {
           ]}
         >
           <InstagramGradient theme={theme} style={styles.gradientFill} />
+          <Animated.View style={[styles.shimmer, { transform: [{ translateX: shimmerX }, { skewX: "-18deg" }] }]} />
         </Animated.View>
       </View>
     </View>
@@ -76,5 +102,12 @@ const styles = StyleSheet.create({
   gradientFill: {
     height: "100%",
     width: "100%"
+  },
+  shimmer: {
+    backgroundColor: "rgba(255,255,255,0.55)",
+    bottom: 0,
+    position: "absolute",
+    top: 0,
+    width: 34
   }
 });

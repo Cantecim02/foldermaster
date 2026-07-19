@@ -1,6 +1,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useMemo, useRef } from "react";
-import { Animated, DimensionValue, Easing, StyleSheet, Text, View } from "react-native";
+import { Animated, StyleSheet, Text, View } from "react-native";
+import { motionDuration, motionEasing } from "../motion";
 import { AppTheme } from "../theme";
 
 type Props = {
@@ -12,18 +13,36 @@ type Props = {
 };
 
 export function ConversionLoader({ label, letterText, progress, subtitle, theme }: Props) {
+  const entry = useRef(new Animated.Value(0)).current;
   const rotate = useRef(new Animated.Value(0)).current;
+  const reverseRotate = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
+  const shimmer = useRef(new Animated.Value(0)).current;
+  const progressValue = useRef(new Animated.Value(0)).current;
   const clampedProgress = Math.max(0, Math.min(1, progress));
   const percent = Math.round(clampedProgress * 100);
   const letters = useMemo(() => letterText.split(""), [letterText]);
 
   useEffect(() => {
+    const entrance = Animated.timing(entry, {
+      duration: motionDuration.reveal,
+      easing: motionEasing.enter,
+      toValue: 1,
+      useNativeDriver: true
+    });
     const rotationLoop = Animated.loop(
       Animated.timing(rotate, {
         toValue: 1,
-        duration: 2100,
-        easing: Easing.linear,
+        duration: 3200,
+        easing: motionEasing.linear,
+        useNativeDriver: true
+      })
+    );
+    const reverseRotationLoop = Animated.loop(
+      Animated.timing(reverseRotate, {
+        toValue: 1,
+        duration: 4600,
+        easing: motionEasing.linear,
         useNativeDriver: true
       })
     );
@@ -31,30 +50,60 @@ export function ConversionLoader({ label, letterText, progress, subtitle, theme 
       Animated.sequence([
         Animated.timing(pulse, {
           toValue: 1,
-          duration: 1050,
-          easing: Easing.out(Easing.cubic),
+          duration: 1250,
+          easing: motionEasing.enter,
           useNativeDriver: true
         }),
         Animated.timing(pulse, {
           toValue: 0,
-          duration: 1050,
-          easing: Easing.in(Easing.cubic),
+          duration: 1250,
+          easing: motionEasing.exit,
           useNativeDriver: true
         })
       ])
     );
+    const shimmerLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmer, {
+          duration: 1350,
+          easing: motionEasing.standard,
+          toValue: 1,
+          useNativeDriver: true
+        }),
+        Animated.delay(420)
+      ])
+    );
 
+    entrance.start();
     rotationLoop.start();
+    reverseRotationLoop.start();
     pulseLoop.start();
+    shimmerLoop.start();
     return () => {
+      entrance.stop();
       rotationLoop.stop();
+      reverseRotationLoop.stop();
       pulseLoop.stop();
+      shimmerLoop.stop();
     };
-  }, [pulse, rotate]);
+  }, [entry, pulse, reverseRotate, rotate, shimmer]);
+
+  useEffect(() => {
+    Animated.timing(progressValue, {
+      duration: motionDuration.reveal,
+      easing: motionEasing.standard,
+      toValue: clampedProgress,
+      useNativeDriver: false
+    }).start();
+  }, [clampedProgress, progressValue]);
 
   const rotation = rotate.interpolate({
     inputRange: [0, 1],
     outputRange: ["90deg", "450deg"]
+  });
+  const reverseRotation = reverseRotate.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["360deg", "0deg"]
   });
   const haloScale = pulse.interpolate({
     inputRange: [0, 0.5, 1],
@@ -64,10 +113,26 @@ export function ConversionLoader({ label, letterText, progress, subtitle, theme 
     inputRange: [0, 0.5, 1],
     outputRange: [0.72, 1, 0.72]
   });
-  const progressWidth = useMemo<DimensionValue>(() => `${Math.max(3, percent)}%`, [percent]);
+  const progressWidth = progressValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0%", "100%"]
+  });
+  const cardTranslateY = entry.interpolate({ inputRange: [0, 1], outputRange: [16, 0] });
+  const cardScale = entry.interpolate({ inputRange: [0, 1], outputRange: [0.965, 1] });
+  const shimmerX = shimmer.interpolate({ inputRange: [0, 1], outputRange: [-46, 340] });
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}>
+    <Animated.View
+      style={[
+        styles.card,
+        {
+          backgroundColor: theme.colors.surfaceAlt,
+          borderColor: theme.colors.border,
+          opacity: entry,
+          transform: [{ translateY: cardTranslateY }, { scale: cardScale }]
+        }
+      ]}
+    >
       <View style={styles.loaderWrap}>
         <Animated.View
           style={[
@@ -91,6 +156,10 @@ export function ConversionLoader({ label, letterText, progress, subtitle, theme 
             style={styles.haloGradient}
           />
         </Animated.View>
+        <Animated.View style={[styles.motionRing, { borderColor: theme.colors.primary, transform: [{ rotate: reverseRotation }] }]}>
+          <View style={[styles.ringDash, { backgroundColor: theme.colors.accent }]} />
+          <View style={[styles.ringDash, styles.ringDashOpposite, { backgroundColor: theme.colors.gradientStart }]} />
+        </Animated.View>
         <View style={[styles.innerDisc, { backgroundColor: theme.colors.surface }]}>
           <View style={styles.letterRow}>
             {letters.map((letter, index) => (
@@ -109,16 +178,17 @@ export function ConversionLoader({ label, letterText, progress, subtitle, theme 
       </View>
 
       <View style={[styles.track, { backgroundColor: theme.colors.border }]}>
-        <View style={[styles.fillClip, { width: progressWidth }]}>
+        <Animated.View style={[styles.fillClip, { width: progressWidth }]}>
           <LinearGradient
             colors={[theme.colors.gradientStart, theme.colors.gradientMiddle, theme.colors.gradientEnd]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.fill}
           />
-        </View>
+          <Animated.View style={[styles.progressShimmer, { transform: [{ translateX: shimmerX }, { skewX: "-18deg" }] }]} />
+        </Animated.View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -181,6 +251,29 @@ const styles = StyleSheet.create({
     position: "absolute",
     width: 132
   },
+  motionRing: {
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 118,
+    opacity: 0.78,
+    position: "absolute",
+    width: 118
+  },
+  ringDash: {
+    borderRadius: 3,
+    height: 5,
+    left: 8,
+    position: "absolute",
+    top: 20,
+    transform: [{ rotate: "-38deg" }],
+    width: 18
+  },
+  ringDashOpposite: {
+    bottom: 18,
+    left: undefined,
+    right: 7,
+    top: undefined
+  },
   haloGradient: {
     borderRadius: 999,
     flex: 1
@@ -236,5 +329,12 @@ const styles = StyleSheet.create({
   fill: {
     height: "100%",
     width: "100%"
+  },
+  progressShimmer: {
+    backgroundColor: "rgba(255,255,255,0.58)",
+    bottom: 0,
+    position: "absolute",
+    top: 0,
+    width: 28
   }
 });

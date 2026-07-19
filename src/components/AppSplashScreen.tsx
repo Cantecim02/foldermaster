@@ -1,5 +1,6 @@
 import { Image } from "expo-image";
-import { Animated, StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { Animated, Easing, StyleSheet, Text, View } from "react-native";
 import { AppTheme } from "../theme";
 import { InstagramGradient } from "./ui/InstagramGradient";
 
@@ -15,9 +16,53 @@ type Props = {
 };
 
 export function AppSplashScreen({ opacity, progress, scale, translateY, theme, subtitle }: Props) {
+  const logoReveal = useRef(new Animated.Value(0)).current;
+  const copyReveal = useRef(new Animated.Value(0)).current;
+  const lightSweep = useRef(new Animated.Value(0)).current;
   const progressWidth = progress.interpolate({
     inputRange: [0, 1],
     outputRange: ["8%", "100%"]
+  });
+
+  useEffect(() => {
+    const animation = Animated.parallel([
+      Animated.spring(logoReveal, {
+        bounciness: 5,
+        speed: 15,
+        toValue: 1,
+        useNativeDriver: true
+      }),
+      Animated.sequence([
+        Animated.delay(150),
+        Animated.timing(copyReveal, {
+          duration: 420,
+          easing: Easing.out(Easing.cubic),
+          toValue: 1,
+          useNativeDriver: true
+        })
+      ]),
+      Animated.sequence([
+        Animated.delay(280),
+        Animated.timing(lightSweep, {
+          duration: 780,
+          easing: Easing.inOut(Easing.cubic),
+          toValue: 1,
+          useNativeDriver: true
+        })
+      ])
+    ]);
+
+    animation.start();
+    return () => animation.stop();
+  }, [copyReveal, lightSweep, logoReveal]);
+
+  const logoScale = logoReveal.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] });
+  const logoRotate = logoReveal.interpolate({ inputRange: [0, 1], outputRange: ["-4deg", "0deg"] });
+  const copyTranslateY = copyReveal.interpolate({ inputRange: [0, 1], outputRange: [12, 0] });
+  const sweepTranslateX = lightSweep.interpolate({ inputRange: [0, 1], outputRange: [-190, 190] });
+  const sweepOpacity = lightSweep.interpolate({
+    inputRange: [0, 0.12, 0.78, 1],
+    outputRange: [0, 0.68, 0.36, 0]
   });
 
   return (
@@ -33,16 +78,46 @@ export function AppSplashScreen({ opacity, progress, scale, translateY, theme, s
     >
       <InstagramGradient theme={theme} style={styles.background}>
         <View style={styles.center}>
-          <View style={styles.logoOuter}>
-            <View style={styles.logoInner}>
-              <Image source={splashLogo} style={styles.logoImage} contentFit="contain" />
+          <Animated.View
+            style={[
+              styles.logoMotion,
+              {
+                opacity: logoReveal,
+                transform: [{ scale: logoScale }, { rotate: logoRotate }]
+              }
+            ]}
+          >
+            <View style={styles.logoOuter}>
+              <View style={styles.logoInner}>
+                <Image source={splashLogo} style={styles.logoImage} contentFit="contain" />
+              </View>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.lightSweep,
+                  {
+                    opacity: sweepOpacity,
+                    transform: [{ translateX: sweepTranslateX }, { rotate: "-16deg" }]
+                  }
+                ]}
+              />
             </View>
-          </View>
-          <Text style={styles.name}>Editio</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
-          <View style={styles.loadingTrack}>
-            <Animated.View style={[styles.loadingFill, { width: progressWidth }]} />
-          </View>
+          </Animated.View>
+          <Animated.View
+            style={[
+              styles.copy,
+              {
+                opacity: copyReveal,
+                transform: [{ translateY: copyTranslateY }]
+              }
+            ]}
+          >
+            <Text style={styles.name}>Editio</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
+            <View style={styles.loadingTrack}>
+              <Animated.View style={[styles.loadingFill, { width: progressWidth }]} />
+            </View>
+          </Animated.View>
         </View>
       </InstagramGradient>
     </Animated.View>
@@ -67,6 +142,9 @@ const styles = StyleSheet.create({
   center: {
     alignItems: "center"
   },
+  logoMotion: {
+    marginBottom: 18
+  },
   logoOuter: {
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.18)",
@@ -75,7 +153,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 148,
     justifyContent: "center",
-    marginBottom: 18,
+    overflow: "hidden",
     width: 148
   },
   logoInner: {
@@ -94,6 +172,15 @@ const styles = StyleSheet.create({
     borderRadius: 32,
     height: 126,
     width: 126
+  },
+  lightSweep: {
+    backgroundColor: "rgba(255,255,255,0.72)",
+    height: 210,
+    position: "absolute",
+    width: 30
+  },
+  copy: {
+    alignItems: "center"
   },
   name: {
     color: "#FFFFFF",

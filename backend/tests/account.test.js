@@ -25,6 +25,8 @@ test("account registration, session, login, logout, and deletion", async () => {
     });
     assert.equal(registered.response.status, 201);
     assert.equal(registered.body.user.email, account.email);
+    assert.equal(registered.body.user.subscriptionStatus, "free");
+    assert.equal(registered.body.user.subscriptionExpireDate, null);
     assert.equal(typeof registered.body.session.token, "string");
     assert.equal("password" in registered.body.user, false);
 
@@ -70,6 +72,107 @@ test("account registration, session, login, logout, and deletion", async () => {
       body: { email: account.email, password: account.password }
     });
     assert.equal(loginAfterDelete.response.status, 401);
+  });
+});
+
+test("conversion history stores metadata per account and is removed with the account", async () => {
+  await withServer(async (baseUrl) => {
+    const firstAccount = {
+      firstName: "Grace",
+      lastName: "Hopper",
+      birthDate: "1990-12-09",
+      email: "grace@example.com",
+      password: "SecurePass123",
+      acceptedTerms: true
+    };
+    const registered = await requestJson(baseUrl, "/auth/register", {
+      method: "POST",
+      body: firstAccount
+    });
+    const token = registered.body.session.token;
+
+    const unauthorized = await requestJson(baseUrl, "/conversion-history");
+    assert.equal(unauthorized.response.status, 401);
+
+    const created = await requestJson(baseUrl, "/conversion-history", {
+      method: "POST",
+      token,
+      body: {
+        fileName: "invoice.pdf",
+        from: "pdf",
+        to: "jpg",
+        fileSizeBytes: 4096,
+        status: "completed"
+      }
+    });
+    assert.equal(created.response.status, 201);
+    assert.deepEqual(
+      {
+        fileName: created.body.item.fileName,
+        from: created.body.item.from,
+        to: created.body.item.to,
+        fileSizeBytes: created.body.item.fileSizeBytes,
+        status: created.body.item.status
+      },
+      {
+        fileName: "invoice.pdf",
+        from: "PDF",
+        to: "JPG",
+        fileSizeBytes: 4096,
+        status: "completed"
+      }
+    );
+    assert.equal("fileUrl" in created.body.item, false);
+
+    const listed = await requestJson(baseUrl, "/conversion-history?limit=10", { token });
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.success, true);
+    assert.equal(listed.body.items.length, 1);
+    assert.equal(listed.body.items[0].fileName, "invoice.pdf");
+
+    const second = await requestJson(baseUrl, "/auth/register", {
+      method: "POST",
+      body: {
+        ...firstAccount,
+        firstName: "Katherine",
+        lastName: "Johnson",
+        email: "katherine@example.com"
+      }
+    });
+    const secondHistory = await requestJson(baseUrl, "/conversion-history", {
+      token: second.body.session.token
+    });
+    assert.equal(secondHistory.body.items.length, 0);
+
+    const invalid = await requestJson(baseUrl, "/conversion-history", {
+      method: "POST",
+      token,
+      body: {
+        fileName: "invoice.pdf",
+        from: "PDF",
+        to: "JPG",
+        fileSizeBytes: -1,
+        status: "completed",
+        fileUrl: "https://example.com/private.pdf"
+      }
+    });
+    assert.equal(invalid.response.status, 400);
+
+    const deleted = await requestJson(baseUrl, "/auth/account", {
+      method: "DELETE",
+      token,
+      body: { password: firstAccount.password }
+    });
+    assert.equal(deleted.response.status, 204);
+
+    const recreated = await requestJson(baseUrl, "/auth/register", {
+      method: "POST",
+      body: firstAccount
+    });
+    const recreatedHistory = await requestJson(baseUrl, "/conversion-history", {
+      token: recreated.body.session.token
+    });
+    assert.equal(recreatedHistory.body.items.length, 0);
   });
 });
 

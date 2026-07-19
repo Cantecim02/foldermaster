@@ -7,7 +7,9 @@ import { nanoid } from "nanoid";
 import { mkdir } from "node:fs/promises";
 import { config } from "./config.js";
 import { accountRoutes } from "./routes/accountRoutes.js";
+import { conversionHistoryRoutes } from "./routes/conversionHistoryRoutes.js";
 import { mediaRoutes } from "./routes/mediaRoutes.js";
+import { supportRoutes } from "./routes/supportRoutes.js";
 import { closeAccountStore, initializeAccountStore } from "./services/accountService.js";
 import { cleanupExpiredFiles, startCleanupTimer, stopCleanupTimer } from "./services/fileCleanupService.js";
 import { conversionQueue } from "./services/conversionJobQueue.js";
@@ -61,6 +63,8 @@ app.use(
 );
 
 app.use("/auth", accountRoutes);
+app.use("/conversion-history", conversionHistoryRoutes);
+app.use("/support", supportRoutes);
 app.use("/", mediaRoutes);
 
 app.use((_request, _response, next) => {

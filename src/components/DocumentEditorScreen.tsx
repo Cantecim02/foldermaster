@@ -2,16 +2,18 @@ import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import { Image } from "expo-image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { Animated, PanResponder, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import Pdf from "react-native-pdf";
 import Svg, { Path } from "react-native-svg";
 import { WebView } from "react-native-webview";
 import { translations } from "../i18n";
+import { motionDuration, motionEasing } from "../motion";
 import { DocumentEditLayer, DocumentPreviewSource } from "../services/documentEditorService";
 import { AppTheme } from "../theme";
 import { AppFile, ConvertedFile } from "../types";
 import { AnimatedPressable } from "./ui/AnimatedPressable";
 import { InstagramGradient } from "./ui/InstagramGradient";
+import { MotionModal } from "./ui/MotionModal";
 
 export type EditorTool = "select" | "pen" | "highlight" | "eraser";
 
@@ -175,6 +177,7 @@ export function DocumentEditorScreen(props: Props) {
   const [signaturePoints, setSignaturePoints] = useState<EditorPoint[]>([]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const screenReveal = useRef(new Animated.Value(0)).current;
   const draftPointsRef = useRef<EditorPoint[]>([]);
   const signaturePointsRef = useRef<EditorPoint[]>([]);
   const startPanRef = useRef({ x: 0, y: 0 });
@@ -209,6 +212,17 @@ export function DocumentEditorScreen(props: Props) {
   const shouldUseNativePdf = Boolean(file && previewSource?.uri && isPdfFile(file));
   const zoomPercent = Math.round(zoom * 100);
   const previewLayoutKey = `${isLandscape ? "landscape" : "portrait"}:${Math.round(surfaceSize.width)}x${Math.round(surfaceSize.height)}`;
+
+  useEffect(() => {
+    const animation = Animated.timing(screenReveal, {
+      duration: motionDuration.reveal,
+      easing: motionEasing.enter,
+      toValue: 1,
+      useNativeDriver: true
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [screenReveal]);
 
   useEffect(() => {
     if (isLandscape) setToolsPanelOpen(true);
@@ -475,7 +489,19 @@ export function DocumentEditorScreen(props: Props) {
   ) : null;
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          backgroundColor: theme.colors.background,
+          opacity: screenReveal,
+          transform: [
+            { translateY: screenReveal.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+            { scale: screenReveal.interpolate({ inputRange: [0, 1], outputRange: [0.99, 1] }) }
+          ]
+        }
+      ]}
+    >
       <View style={[styles.topBar, isLandscape && styles.topBarLandscape, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
         <TouchableOpacity style={[styles.iconButton, { backgroundColor: theme.colors.surfaceAlt }]} onPress={onBack}>
           <Feather name="x" size={20} color={theme.colors.text} />
@@ -955,9 +981,10 @@ export function DocumentEditorScreen(props: Props) {
           </View>
         </>
       ) : null}
-      <Modal
+      <MotionModal
         visible={signaturePadVisible}
-        animationType="slide"
+        transparent={false}
+        variant="fullscreen"
         supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
         onRequestClose={closeSignaturePad}
       >
@@ -994,10 +1021,10 @@ export function DocumentEditorScreen(props: Props) {
             </AnimatedPressable>
           </View>
         </View>
-      </Modal>
-      <Modal
+      </MotionModal>
+      <MotionModal
         transparent
-        animationType="fade"
+        variant="dialog"
         visible={deletePageConfirmVisible}
         supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
         onRequestClose={() => setDeletePageConfirmVisible(false)}
@@ -1027,10 +1054,10 @@ export function DocumentEditorScreen(props: Props) {
             </View>
           </View>
         </View>
-      </Modal>
-      <Modal
+      </MotionModal>
+      <MotionModal
         transparent
-        animationType="fade"
+        variant="dialog"
         visible={colorModalVisible}
         supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
         onRequestClose={() => setColorModalVisible(false)}
@@ -1085,8 +1112,8 @@ export function DocumentEditorScreen(props: Props) {
             </View>
           </View>
         </View>
-      </Modal>
-    </View>
+      </MotionModal>
+    </Animated.View>
   );
 }
 
