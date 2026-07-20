@@ -16,7 +16,7 @@
       "assets/**/*"
     ],
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.cantecim.editio",
       "entitlements": {
         "keychain-access-groups": [
@@ -109,7 +109,8 @@
       "expo-asset",
       "expo-localization",
       "expo-secure-store",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-iap"
     ],
     "extra": {
       "eas": {

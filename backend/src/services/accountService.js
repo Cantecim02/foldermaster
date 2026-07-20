@@ -24,7 +24,8 @@ export async function initializeAccountStore() {
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
-  database.exec(`
+  const migrate = database.transaction(() => {
+    database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       first_name TEXT NOT NULL,
@@ -32,6 +33,7 @@ export async function initializeAccountStore() {
       birth_date TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_hash TEXT NOT NULL,
+      app_account_token TEXT UNIQUE,
       subscription_status TEXT NOT NULL DEFAULT 'free',
       subscription_expire_date TEXT,
       terms_version TEXT NOT NULL,
@@ -52,11 +54,22 @@ export async function initializeAccountStore() {
       ON account_sessions(user_id);
     CREATE INDEX IF NOT EXISTS account_sessions_expires_at_idx
       ON account_sessions(expires_at);
-  `);
+    `);
 
-  ensureColumn(database, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'free'");
-  ensureColumn(database, "users", "subscription_expire_date", "TEXT");
-  database.exec(`
+    ensureColumn(database, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'free'");
+    ensureColumn(database, "users", "subscription_expire_date", "TEXT");
+    ensureColumn(database, "users", "app_account_token", "TEXT");
+    const usersWithoutAppAccountToken = database.prepare(
+      "SELECT id FROM users WHERE app_account_token IS NULL OR app_account_token = ''"
+    ).all();
+    const updateAppAccountToken = database.prepare("UPDATE users SET app_account_token = ? WHERE id = ?");
+    for (const row of usersWithoutAppAccountToken) updateAppAccountToken.run(randomUUID(), row.id);
+    database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS users_app_account_token_idx
+      ON users(app_account_token)
+      WHERE app_account_token IS NOT NULL;
+    `);
+    database.exec(`
     CREATE TABLE IF NOT EXISTS conversion_history (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -70,7 +83,9 @@ export async function initializeAccountStore() {
 
     CREATE INDEX IF NOT EXISTS conversion_history_user_created_idx
       ON conversion_history(user_id, created_at DESC);
-  `);
+    `);
+  });
+  migrate.immediate();
 
   dummyPasswordHash = await argon2.hash(randomBytes(32), passwordHashOptions);
   deleteExpiredSessions();
@@ -90,6 +105,7 @@ export async function registerAccount(input) {
   const now = new Date().toISOString();
   const user = {
     id: randomUUID(),
+    appAccountToken: randomUUID(),
     firstName: input.firstName.trim(),
     lastName: input.lastName.trim(),
     birthDate: input.birthDate,
@@ -105,10 +121,10 @@ export async function registerAccount(input) {
     db.prepare(`
       INSERT INTO users (
         id, first_name, last_name, birth_date, email, password_hash,
-        terms_version, privacy_version, accepted_at, created_at, updated_at
+        app_account_token, terms_version, privacy_version, accepted_at, created_at, updated_at
       ) VALUES (
         @id, @firstName, @lastName, @birthDate, @email, @passwordHash,
-        @termsVersion, @privacyVersion, @acceptedAt, @createdAt, @updatedAt
+        @appAccountToken, @termsVersion, @privacyVersion, @acceptedAt, @createdAt, @updatedAt
       )
     `).run({ ...user, passwordHash });
   } catch (error) {
@@ -165,6 +181,29 @@ export function authenticateRequest(request) {
   };
 }
 
+export function authenticateOptionalRequest(request) {
+  const authorization = request.get("authorization");
+  if (!authorization) return null;
+  return authenticateRequest(request);
+}
+
+export function getAccountDatabase() {
+  return requireDatabase();
+}
+
+export function getOrCreateAppAccountToken(userId) {
+  const db = requireDatabase();
+  const row = db.prepare("SELECT app_account_token FROM users WHERE id = ?").get(userId);
+  if (!row) {
+    throw new HttpError(404, "Account was not found.", { code: "ACCOUNT_NOT_FOUND" });
+  }
+  if (row.app_account_token) return row.app_account_token;
+  const token = randomUUID();
+  db.prepare("UPDATE users SET app_account_token = ?, updated_at = ? WHERE id = ?")
+    .run(token, new Date().toISOString(), userId);
+  return token;
+}
+
 export function logoutAccount(tokenHash) {
   requireDatabase().prepare("DELETE FROM account_sessions WHERE token_hash = ?").run(tokenHash);
 }
@@ -177,6 +216,23 @@ export async function deleteAccount({ userId, password }) {
   }
 
   db.transaction(() => {
+    if (tableExists(db, "subscription_entitlements")) {
+      db.prepare(`
+        UPDATE subscription_entitlements
+        SET user_id = NULL, updated_at = ?
+        WHERE user_id = ?
+      `).run(new Date().toISOString(), userId);
+    }
+    if (tableExists(db, "free_conversion_usage")) {
+      db.prepare("DELETE FROM free_conversion_usage WHERE user_id = ?").run(userId);
+    }
+    if (tableExists(db, "conversion_usage_events")) {
+      db.prepare(`
+        UPDATE conversion_usage_events
+        SET user_id = NULL
+        WHERE user_id = ?
+      `).run(userId);
+    }
     db.prepare("DELETE FROM account_sessions WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM users WHERE id = ?").run(userId);
   })();
@@ -256,6 +312,7 @@ function publicUser(user) {
     lastName: user.lastName,
     birthDate: user.birthDate,
     email: user.email,
+    appAccountToken: user.appAccountToken,
     subscriptionStatus: user.subscriptionStatus ?? "free",
     subscriptionExpireDate: user.subscriptionExpireDate ?? null,
     termsVersion: user.termsVersion,
@@ -272,6 +329,7 @@ function mapUser(row) {
     lastName: row.last_name,
     birthDate: row.birth_date,
     email: row.email,
+    appAccountToken: row.app_account_token,
     subscriptionStatus: row.subscription_status ?? "free",
     subscriptionExpireDate: row.subscription_expire_date ?? null,
     termsVersion: row.terms_version,
@@ -310,6 +368,10 @@ function ensureColumn(db, tableName, columnName, definition) {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
   if (columns.some((column) => column.name === columnName)) return;
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function tableExists(db, tableName) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
 }
 
 function readBearerToken(header) {

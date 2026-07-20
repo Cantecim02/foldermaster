@@ -8,6 +8,7 @@ let webSessionToken: string | null = null;
 
 export type AccountUser = {
   id: string;
+  appAccountToken: string;
   firstName: string;
   lastName: string;
   birthDate: string;
@@ -183,6 +184,10 @@ async function saveSessionToken(token: string) {
 async function readSessionToken() {
   if (Platform.OS === "web") return webSessionToken;
   return SecureStore.getItemAsync(sessionTokenKey);
+}
+
+export async function getAccountSessionToken() {
+  return readSessionToken();
 }
 
 async function clearSessionToken() {

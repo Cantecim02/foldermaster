@@ -4,5 +4,6 @@ window.EDITIO_CONFIG = Object.freeze({
     ? "http://127.0.0.1:4000"
     : "https://api.editioapp.com",
   appStoreUrl: "",
-  supportEmail: "editioapp@gmail.com"
+  supportEmail: "editioapp@gmail.com",
+  monetizationLive: /*__EDITIO_MONETIZATION_LIVE__*/ false
 });

@@ -23,6 +23,17 @@ function readNumber(name, fallback, { min, max } = {}) {
   return value;
 }
 
+function readOptionalInteger(name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return null;
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a whole number.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be a whole number between ${min} and ${max}.`);
+  }
+  return value;
+}
+
 function readCsv(name, fallback = "") {
   return (process.env[name] ?? fallback)
     .split(",")
@@ -36,6 +47,23 @@ function readBoolean(name, fallback = false) {
   if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) return true;
   if (["0", "false", "no", "off"].includes(raw.toLowerCase())) return false;
   throw new Error(`${name} must be true or false.`);
+}
+
+function readString(name, fallback = "") {
+  return process.env[name]?.trim() || fallback;
+}
+
+function readAppleEnvironments() {
+  const fallback = isProduction ? "Production" : "Xcode,Sandbox";
+  const allowed = new Set(["Production", "Sandbox", "Xcode", "LocalTesting"]);
+  const environments = (process.env.APPLE_IAP_ENVIRONMENT?.trim() || fallback)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (environments.length === 0 || environments.some((value) => !allowed.has(value))) {
+    throw new Error("APPLE_IAP_ENVIRONMENT must contain Production, Sandbox, Xcode, or LocalTesting.");
+  }
+  return environments;
 }
 
 function normalizeBaseUrl(value) {
@@ -105,6 +133,36 @@ export const config = {
   smtpPass: process.env.SMTP_PASS || "",
   smtpFrom: process.env.SMTP_FROM?.trim() || "",
   smtpJsonTransport: !isProduction && readBoolean("SMTP_JSON_TRANSPORT", false),
+  monetizationEnabled: readBoolean("MONETIZATION_ENABLED", false),
+  monetizationMinIosBuild: readOptionalInteger("MONETIZATION_MIN_IOS_BUILD"),
+  freeConversionLimit: readNumber("FREE_CONVERSION_LIMIT", 3, { min: 0, max: 100 }),
+  conversionAuthorizationTtlMs:
+    readNumber("CONVERSION_AUTHORIZATION_TTL_MINUTES", 15, { min: 1, max: 120 }) * 60 * 1000,
+  appleBundleId: readString("APPLE_BUNDLE_ID", "com.cantecim.editio"),
+  appleAppId: readNumber("APPLE_APP_ID", 6790405876, { min: 1 }),
+  appleProductIds: Object.freeze([
+    readString("APPLE_MONTHLY_PRODUCT_ID", "com.cantecim.editio.pro.monthly"),
+    readString("APPLE_YEARLY_PRODUCT_ID", "com.cantecim.editio.pro.yearly")
+  ]),
+  appleIapIssuerId: readString("APPLE_IAP_ISSUER_ID"),
+  appleIapKeyId: readString("APPLE_IAP_KEY_ID"),
+  appleIapPrivateKeyPath: readString("APPLE_IAP_PRIVATE_KEY_PATH"),
+  appleIapEnvironments: readAppleEnvironments(),
+  appleRootCaDirectory: readString("APPLE_ROOT_CA_DIRECTORY"),
+  appleNotificationProductionUrl: readString("APPLE_NOTIFICATION_PRODUCTION_URL"),
+  appleNotificationSandboxUrl: readString("APPLE_NOTIFICATION_SANDBOX_URL"),
   ffmpegPath: process.env.FFMPEG_PATH?.trim() || bundledFfmpegPath || "ffmpeg",
   ffprobePath: process.env.FFPROBE_PATH?.trim() || bundledFfprobePath || "ffprobe"
 };
+
+if (config.monetizationEnabled && config.isProduction) {
+  const missing = [
+    ["APPLE_IAP_ISSUER_ID", config.appleIapIssuerId],
+    ["APPLE_IAP_KEY_ID", config.appleIapKeyId],
+    ["APPLE_IAP_PRIVATE_KEY_PATH", config.appleIapPrivateKeyPath],
+    ["APPLE_ROOT_CA_DIRECTORY", config.appleRootCaDirectory]
+  ].filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`Monetization is enabled but required Apple configuration is missing: ${missing.join(", ")}.`);
+  }
+}

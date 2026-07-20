@@ -1,5 +1,6 @@
 import axios from "axios";
 import { NativeModules, Platform } from "react-native";
+import { getEditioClientHeaders } from "./clientMetadata";
 
 declare const __DEV__: boolean | undefined;
 
@@ -8,6 +9,11 @@ const configuredApiPort = process.env.EXPO_PUBLIC_MEDIA_API_PORT;
 const uploadTimeoutMs = 10 * 60 * 1000;
 
 type NativeUploadFile = { uri: string; name: string; type: string };
+export type BillingUploadContext = {
+  installationId: string;
+  authorizationId: string | null;
+  sessionToken: string | null;
+};
 export type PdfCompressionResponse = {
   fileUrl: string;
   filename: string;
@@ -25,6 +31,7 @@ export async function convertUploadedMediaFile(params: {
   outputFormat: "mp3" | "mp4" | "gif" | "jpg" | "png" | "webp" | "wav" | "udf";
   trimStartSeconds?: number;
   trimDurationSeconds?: number;
+  billingContext?: BillingUploadContext;
 }) {
   const form = new FormData();
   if (isNativeUploadFile(params.file)) {
@@ -44,7 +51,8 @@ export async function convertUploadedMediaFile(params: {
     { fileUrl: string; filename: string } | { files: Array<{ fileUrl: string; filename: string }> }
   >(
     `${getApiBaseUrl()}/convert-file`,
-    form
+    form,
+    params.billingContext
   );
   return normalizeDownloadUrls(response.data);
 }
@@ -52,6 +60,7 @@ export async function convertUploadedMediaFile(params: {
 export async function convertUploadedImagesToPdf(params: {
   files: Array<Blob | NativeUploadFile>;
   filename: string;
+  billingContext?: BillingUploadContext;
 }) {
   const form = new FormData();
   for (const file of params.files) {
@@ -64,7 +73,8 @@ export async function convertUploadedImagesToPdf(params: {
 
   const response = await postMultipartWithRetry<{ fileUrl: string; filename: string }>(
     `${getApiBaseUrl()}/convert-images-to-pdf`,
-    form
+    form,
+    params.billingContext
   );
   return normalizeDownloadUrls(response.data);
 }
@@ -73,6 +83,7 @@ export async function compressUploadedPdf(params: {
   file: Blob | NativeUploadFile;
   filename: string;
   compressionPreset?: PdfCompressionPreset;
+  billingContext?: BillingUploadContext;
 }) {
   const form = new FormData();
   if (isNativeUploadFile(params.file)) {
@@ -84,22 +95,36 @@ export async function compressUploadedPdf(params: {
 
   const response = await postMultipartWithRetry<PdfCompressionResponse>(
     `${getApiBaseUrl()}/compress-pdf`,
-    form
+    form,
+    params.billingContext
   );
   return normalizeDownloadUrls(response.data);
 }
 
-async function postMultipartWithRetry<T>(url: string, form: FormData) {
+async function postMultipartWithRetry<T>(url: string, form: FormData, billingContext?: BillingUploadContext) {
+  const headers = {
+    "Content-Type": "multipart/form-data",
+    ...getEditioClientHeaders(),
+    ...(billingContext?.installationId
+      ? { "x-editio-installation-id": billingContext.installationId }
+      : {}),
+    ...(billingContext?.authorizationId
+      ? { "x-editio-conversion-authorization": billingContext.authorizationId }
+      : {}),
+    ...(billingContext?.sessionToken
+      ? { Authorization: `Bearer ${billingContext.sessionToken}` }
+      : {})
+  };
   try {
     return await axios.post<T>(url, form, {
-      headers: { "Content-Type": "multipart/form-data" },
+      headers,
       timeout: uploadTimeoutMs
     });
   } catch (caught) {
     if (!isTransientUploadError(caught)) throw normalizeApiError(caught);
     try {
       return await axios.post<T>(url, form, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers,
         timeout: uploadTimeoutMs
       });
     } catch (retryError) {

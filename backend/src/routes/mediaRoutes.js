@@ -8,6 +8,10 @@ import { compressUploadedPdf, convertUploadedFile, convertUploadedImagesToPdf } 
 import { createOperationTracker, safeRemoveFile } from "../services/fileCleanupService.js";
 import { allowedKindsForOutput, validateUploadedFiles } from "../services/fileValidationService.js";
 import { conversionQueue } from "../services/conversionJobQueue.js";
+import {
+  authorizeBackendConversion,
+  requireConversionClientCompatibility
+} from "../services/conversionAccessService.js";
 import { HttpError } from "../utils/httpError.js";
 
 export const mediaRoutes = express.Router();
@@ -26,9 +30,10 @@ mediaRoutes.get("/health", (_request, response) => {
   response.json({ ok: true });
 });
 
-mediaRoutes.post("/convert-file", upload.single("file"), async (request, response, next) => {
+mediaRoutes.post("/convert-file", requireConversionClientCompatibility, upload.single("file"), async (request, response, next) => {
   const requestContext = createRequestContext(request, response);
   const tracker = createOperationTracker();
+  let conversionAccess;
   if (request.file) tracker.trackInput(request.file.path);
   let keepOutputs = false;
   try {
@@ -40,6 +45,7 @@ mediaRoutes.post("/convert-file", upload.single("file"), async (request, respons
       trimStartSeconds: z.coerce.number().min(0).optional(),
       trimDurationSeconds: z.coerce.number().min(0.1).max(3).optional()
     }).parse(request.body);
+    conversionAccess = request.editioConversionAccess ?? authorizeBackendConversion(request);
     const trimOptions =
       payload.trimStartSeconds !== undefined || payload.trimDurationSeconds !== undefined
         ? {
@@ -60,9 +66,11 @@ mediaRoutes.post("/convert-file", upload.single("file"), async (request, respons
     if (requestContext.signal.aborted) {
       throw new HttpError(499, "Request was cancelled.", { code: "REQUEST_CANCELLED", expose: false });
     }
+    conversionAccess.complete();
     response.json(result);
     keepOutputs = true;
   } catch (error) {
+    conversionAccess?.release();
     next(error);
   } finally {
     await tracker.close({ keepOutputs });
@@ -71,9 +79,10 @@ mediaRoutes.post("/convert-file", upload.single("file"), async (request, respons
   }
 });
 
-mediaRoutes.post("/convert-images-to-pdf", upload.array("files", config.maxFilesPerRequest), async (request, response, next) => {
+mediaRoutes.post("/convert-images-to-pdf", requireConversionClientCompatibility, upload.array("files", config.maxFilesPerRequest), async (request, response, next) => {
   const requestContext = createRequestContext(request, response);
   const tracker = createOperationTracker();
+  let conversionAccess;
   const files = Array.isArray(request.files) ? request.files : [];
   for (const file of files) tracker.trackInput(file.path);
   let keepOutputs = false;
@@ -81,6 +90,7 @@ mediaRoutes.post("/convert-images-to-pdf", upload.array("files", config.maxFiles
     if (!files.length) {
       throw new HttpError(400, "At least one image file is required.");
     }
+    conversionAccess = request.editioConversionAccess ?? authorizeBackendConversion(request);
     await validateUploadedFiles(files, ["jpg", "png"], { signal: requestContext.signal });
     const result = await conversionQueue.run(
       ({ signal }) => convertUploadedImagesToPdf({ files, context: { signal, tracker } }),
@@ -89,9 +99,11 @@ mediaRoutes.post("/convert-images-to-pdf", upload.array("files", config.maxFiles
     if (requestContext.signal.aborted) {
       throw new HttpError(499, "Request was cancelled.", { code: "REQUEST_CANCELLED", expose: false });
     }
+    conversionAccess.complete();
     response.json(result);
     keepOutputs = true;
   } catch (error) {
+    conversionAccess?.release();
     next(error);
   } finally {
     await tracker.close({ keepOutputs });
@@ -100,9 +112,10 @@ mediaRoutes.post("/convert-images-to-pdf", upload.array("files", config.maxFiles
   }
 });
 
-mediaRoutes.post("/compress-pdf", upload.single("file"), async (request, response, next) => {
+mediaRoutes.post("/compress-pdf", requireConversionClientCompatibility, upload.single("file"), async (request, response, next) => {
   const requestContext = createRequestContext(request, response);
   const tracker = createOperationTracker();
+  let conversionAccess;
   if (request.file) tracker.trackInput(request.file.path);
   let keepOutputs = false;
   try {
@@ -112,6 +125,7 @@ mediaRoutes.post("/compress-pdf", upload.single("file"), async (request, respons
     const payload = z.object({
       compressionPreset: compressionPresetSchema.default("balanced")
     }).parse(request.body);
+    conversionAccess = request.editioConversionAccess ?? authorizeBackendConversion(request);
     await validateUploadedFiles(request.file, ["pdf"], { signal: requestContext.signal });
     const result = await conversionQueue.run(
       ({ signal }) => compressUploadedPdf({
@@ -124,9 +138,11 @@ mediaRoutes.post("/compress-pdf", upload.single("file"), async (request, respons
     if (requestContext.signal.aborted) {
       throw new HttpError(499, "Request was cancelled.", { code: "REQUEST_CANCELLED", expose: false });
     }
+    conversionAccess.complete();
     response.json(result);
     keepOutputs = true;
   } catch (error) {
+    conversionAccess?.release();
     next(error);
   } finally {
     await tracker.close({ keepOutputs });

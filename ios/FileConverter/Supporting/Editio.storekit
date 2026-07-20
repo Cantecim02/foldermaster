@@ -1,0 +1,97 @@
+{
+  "identifier" : "3F8A65E8-446A-4F49-8FD8-A779CE8F4891",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6790405876",
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA"
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "49F30D62-08DE-4712-A552-D372A31F4E36",
+      "localizations" : [
+        {
+          "description" : "Access supported Editio conversions while your subscription is active.",
+          "displayName" : "Editio Pro",
+          "locale" : "en_US"
+        },
+        {
+          "description" : "Aboneliginiz aktifken desteklenen Editio donusumlerine erisim.",
+          "displayName" : "Editio Pro",
+          "locale" : "tr_TR"
+        }
+      ],
+      "name" : "Editio Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "83C170A8-252F-4518-929A-28C432AA49DF",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Access supported conversions, billed monthly.",
+              "displayName" : "Editio Pro Monthly",
+              "locale" : "en_US"
+            },
+            {
+              "description" : "Aylik yenilenen desteklenen donusum erisimi.",
+              "displayName" : "Editio Pro Aylik",
+              "locale" : "tr_TR"
+            }
+          ],
+          "productID" : "com.cantecim.editio.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Editio Pro Monthly",
+          "subscriptionGroupID" : "49F30D62-08DE-4712-A552-D372A31F4E36"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "39.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "EFA11C8D-B2B5-4303-8EA5-BF10EC67C9F6",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Access supported conversions, billed yearly.",
+              "displayName" : "Editio Pro Yearly",
+              "locale" : "en_US"
+            },
+            {
+              "description" : "Yillik yenilenen desteklenen donusum erisimi.",
+              "displayName" : "Editio Pro Yillik",
+              "locale" : "tr_TR"
+            }
+          ],
+          "productID" : "com.cantecim.editio.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Editio Pro Yearly",
+          "subscriptionGroupID" : "49F30D62-08DE-4712-A552-D372A31F4E36"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

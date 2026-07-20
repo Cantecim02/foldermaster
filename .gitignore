@@ -4,6 +4,15 @@ dist
 .expo/
 **/.expo/
 .env
+.env.*
+!.env.example
+!backend/.env.example
+*.p8
+*.pem
+*.key
+*.sqlite
+*.sqlite3
+*.db
 .DS_Store
 *.log
 backend/downloads/

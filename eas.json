@@ -6,12 +6,20 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
+        "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"
+      }
     },
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com"
+        "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com",
+        "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
+        "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"
       },
       "ios": {
         "simulator": false
@@ -20,7 +28,10 @@
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com"
+        "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com",
+        "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
+        "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"
       },
       "ios": {
         "simulator": false

@@ -7,16 +7,21 @@ import { nanoid } from "nanoid";
 import { mkdir } from "node:fs/promises";
 import { config } from "./config.js";
 import { accountRoutes } from "./routes/accountRoutes.js";
+import { appleNotificationRoutes, billingRoutes } from "./routes/billingRoutes.js";
 import { conversionHistoryRoutes } from "./routes/conversionHistoryRoutes.js";
 import { mediaRoutes } from "./routes/mediaRoutes.js";
 import { supportRoutes } from "./routes/supportRoutes.js";
 import { closeAccountStore, initializeAccountStore } from "./services/accountService.js";
+import { initializeBillingStore } from "./services/billingStore.js";
+import { initializeAppleStoreService } from "./services/appleStoreService.js";
 import { cleanupExpiredFiles, startCleanupTimer, stopCleanupTimer } from "./services/fileCleanupService.js";
 import { conversionQueue } from "./services/conversionJobQueue.js";
 import { createErrorPayload, HttpError } from "./utils/httpError.js";
 
 await mkdir(config.downloadDir, { recursive: true });
 await initializeAccountStore();
+initializeBillingStore();
+await initializeAppleStoreService();
 await cleanupExpiredFiles().catch((error) => {
   console.warn(`[cleanup] startup failed: ${sanitizeLogMessage(error)}`);
 });
@@ -53,16 +58,19 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 morgan.token("id", (request) => request.id ?? "-");
 app.use(morgan(config.isProduction ? ":id :method :url :status :response-time ms" : "dev"));
+app.use("/billing/apple/notifications", appleNotificationRoutes);
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
     limit: 40,
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    skip: (request) => request.path === "/billing/apple/notifications"
   })
 );
 
 app.use("/auth", accountRoutes);
+app.use("/billing", billingRoutes);
 app.use("/conversion-history", conversionHistoryRoutes);
 app.use("/support", supportRoutes);
 app.use("/", mediaRoutes);

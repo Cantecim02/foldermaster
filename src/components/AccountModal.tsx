@@ -43,6 +43,8 @@ type Props = {
   onSessionEnd: (reason: AccountSessionEndReason) => Promise<void>;
   onClose: () => void;
   onOpenLegal: (key: LegalKey) => void;
+  monetizationEnabled?: boolean;
+  onManageSubscription?: () => void;
 };
 
 type Copy = {
@@ -85,6 +87,8 @@ type Copy = {
   benefits: string[];
   historyLoginPrompt: string;
   accountStatus: string;
+  deleteSubscriptionWarning: string;
+  manageSubscription: string;
 };
 
 const en: Copy = {
@@ -131,7 +135,9 @@ const en: Copy = {
     "View your conversion records on devices signed in to the same account"
   ],
   historyLoginPrompt: "Sign in to keep and view your conversion history.",
-  accountStatus: "Active account"
+  accountStatus: "Active account",
+  deleteSubscriptionWarning: "Deleting your Editio account does not cancel an Apple subscription. Manage or cancel it in your Apple subscription settings.",
+  manageSubscription: "Manage Apple subscription"
 };
 
 const copies: Record<Language, Copy> = {
@@ -147,7 +153,9 @@ const copies: Record<Language, Copy> = {
     deleteWarning: "Hesabınızı ve aktif oturumlarınızı kalıcı olarak silmek için şifrenizi girin.", deleteConfirm: "Kalıcı olarak sil", cancel: "Vazgeç",
     benefitsTitle: "Editio hesabı oluşturun",
     benefits: ["Dönüşüm kayıtlarınızı hesabınızda saklayın", "Dosya adı, format, durum ve tarih bilgilerini tek yerde görün", "Çıkış yapıp yeniden girdiğinizde hesap geçmişinize erişin", "Aynı hesapla giriş yaptığınız cihazlarda dönüşüm kayıtlarınızı görüntüleyin"],
-    historyLoginPrompt: "Geçmişinizi kaydetmek ve görmek için giriş yapın.", accountStatus: "Aktif hesap"
+    historyLoginPrompt: "Geçmişinizi kaydetmek ve görmek için giriş yapın.", accountStatus: "Aktif hesap",
+    deleteSubscriptionWarning: "Editio hesabınızı silmek Apple aboneliğinizi iptal etmez. Aboneliğinizi Apple abonelik ayarlarından yönetmeli veya iptal etmelisiniz.",
+    manageSubscription: "Apple aboneliğini yönet"
   },
   zh: {
     ...en, title: "Editio 帐户", subtitle: "安全登录或创建帐户。", login: "登录", register: "创建帐户", firstName: "名字", lastName: "姓氏", birthDate: "出生日期", email: "电子邮件", password: "密码", confirmPassword: "再次输入密码",
@@ -176,7 +184,20 @@ const copies: Record<Language, Copy> = {
   }
 };
 
-export function AccountModal({ visible, isLandscape, language, theme, user, onUserChange, onLifecycleSuccess, onSessionEnd, onClose, onOpenLegal }: Props) {
+export function AccountModal({
+  visible,
+  isLandscape,
+  language,
+  theme,
+  user,
+  onUserChange,
+  onLifecycleSuccess,
+  onSessionEnd,
+  onClose,
+  onOpenLegal,
+  monetizationEnabled = false,
+  onManageSubscription
+}: Props) {
   const copy = copies[language] ?? en;
   const [mode, setMode] = useState<AccountMode>("login");
   const [firstName, setFirstName] = useState("");
@@ -378,6 +399,19 @@ export function AccountModal({ visible, isLandscape, language, theme, user, onUs
                 ) : (
                   <View style={[styles.deletePanel, { borderColor: "#EF4444", backgroundColor: theme.colors.surfaceAlt }]}>
                     <Text style={[styles.deleteText, { color: theme.colors.muted }]}>{copy.deleteWarning}</Text>
+                    {monetizationEnabled ? (
+                      <View style={[styles.subscriptionWarning, { backgroundColor: theme.colors.dangerSoft }]}>
+                        <Feather name="alert-triangle" size={15} color={theme.colors.danger} />
+                        <View style={styles.subscriptionWarningCopy}>
+                          <Text style={[styles.deleteText, { color: theme.colors.text }]}>{copy.deleteSubscriptionWarning}</Text>
+                          {onManageSubscription ? (
+                            <TouchableOpacity onPress={onManageSubscription}>
+                              <Text style={[styles.subscriptionLink, { color: theme.colors.primary }]}>{copy.manageSubscription}</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      </View>
+                    ) : null}
                     <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggle={() => setPasswordVisible((current) => !current)} placeholder={copy.password} theme={theme} borderColor={borderColor} />
                     <View style={styles.deleteActions}>
                       <TouchableOpacity style={[styles.smallButton, { borderColor }]} onPress={() => { setDeleting(false); setPassword(""); setError(null); }}>
@@ -755,6 +789,9 @@ const styles = StyleSheet.create({
   dangerLinkText: { color: "#EF4444", fontSize: 12, fontWeight: "900" },
   deletePanel: { borderRadius: 14, borderWidth: 1, gap: 10, padding: 12, width: "100%" },
   deleteText: { fontSize: 12, fontWeight: "700", lineHeight: 17 },
+  subscriptionWarning: { alignItems: "flex-start", borderRadius: 8, flexDirection: "row", gap: 8, padding: 10 },
+  subscriptionWarningCopy: { flex: 1, gap: 6 },
+  subscriptionLink: { fontSize: 12, fontWeight: "900" },
   deleteActions: { flexDirection: "row", gap: 8 },
   smallButton: { alignItems: "center", borderRadius: 11, borderWidth: 1, flex: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: 8 },
   smallButtonText: { fontSize: 11, fontWeight: "900", textAlign: "center" },

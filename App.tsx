@@ -39,16 +39,20 @@ import { DocumentEditorCard } from "./src/components/DocumentEditorCard";
 import { DocumentEditorScreen, EditorTool } from "./src/components/DocumentEditorScreen";
 import { HistoryList } from "./src/components/HistoryList";
 import { LanguageTransitionContent } from "./src/components/LanguageTransitionContent";
+import { PaywallModal } from "./src/components/PaywallModal";
 import { ProgressBar } from "./src/components/ProgressBar";
+import { SubscriptionStatusCard } from "./src/components/SubscriptionStatusCard";
 import { ThemePaintTransition } from "./src/components/ThemePaintTransition";
 import { AnimatedPressable } from "./src/components/ui/AnimatedPressable";
 import { InstagramGradient } from "./src/components/ui/InstagramGradient";
 import { MotionModal } from "./src/components/ui/MotionModal";
 import { useHistory } from "./src/hooks/useHistory";
+import { useEditioBilling } from "./src/hooks/useEditioBilling";
 import { Language, getInitialLanguage, translations } from "./src/i18n";
 import { motionDuration, motionEasing, waitForModalExit } from "./src/motion";
 import { compressPdfFile, convertFiles, type PdfCompressionPreset } from "./src/services/conversionService";
 import { AccountUser, recordConversionHistory, restoreAccountSession } from "./src/services/authService";
+import { BillingApiError, type BillingRequestContext } from "./src/services/billingApi";
 import { getAvailableOutputs, mimeByType, supportedConversions } from "./src/services/conversionTypes";
 import { detectFileTypeInfo, fileTypeFromDetection } from "./src/services/fileTypeDetector";
 import {
@@ -808,6 +812,7 @@ export default function App() {
   const [settingsDocumentKey, setSettingsDocumentKey] = useState<SettingsDocumentKey | null>(null);
   const [settingsDocumentVisible, setSettingsDocumentVisible] = useState(false);
   const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [paywallVisible, setPaywallVisible] = useState(false);
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
   const [accountLifecycleEvent, setAccountLifecycleEvent] = useState<AccountLifecycleEvent | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
@@ -910,6 +915,7 @@ export default function App() {
     [systemScheme, theme.isDark, themeTransitionTarget]
   );
   const t = translations[language];
+  const billing = useEditioBilling(accountUser, language);
   const isLandscape = width > height;
   const appUiCopy = appUiCopies[language] ?? appUiCopies.en;
   const modalBorderColor = theme.isDark ? theme.colors.border : "#C7C9D1";
@@ -1496,6 +1502,8 @@ export default function App() {
     const jobOutput = retryJob?.outputType ?? outputType;
     let conversionStartedAt: number | null = null;
     let completedJobForShare: ConversionJob | null = null;
+    let billingContext: BillingRequestContext | null = null;
+    let conversionProducedOutput = false;
 
     setError(null);
     setProgress(0);
@@ -1527,6 +1535,9 @@ export default function App() {
         throw new Error(t.errors.unsupported);
       }
 
+      const billingAuthorization = await billing.beginConversion(`${detectedType}_to_${jobOutput}`);
+      billingContext = billingAuthorization.context;
+
       if (conversionModalVisible) {
         setConversionModalVisible(false);
         await waitForModalExit();
@@ -1541,9 +1552,12 @@ export default function App() {
           inputType: detectedType,
           outputType: jobOutput,
           gifTrim,
+          billingContext: billingContext ?? undefined,
           onProgress: setProgress
         });
       const result = await startConversion();
+      conversionProducedOutput = true;
+      await completeBillingConversion(billingContext, billing);
       await waitForMinimumElapsed(conversionStartedAt, minimumConversionLoaderMs);
       setProgress(1);
 
@@ -1562,6 +1576,26 @@ export default function App() {
       syncAccountConversionHistory(completedJob);
       completedJobForShare = completedJob;
     } catch (caught) {
+      if (caught instanceof BillingApiError && caught.code === "FREE_LIMIT_REACHED") {
+        setError(null);
+        setConversionModalVisible(false);
+        await waitForModalExit();
+        setPaywallVisible(true);
+        return;
+      }
+      if (caught instanceof BillingApiError && caught.code === "NETWORK_ERROR") {
+        setError(
+          language === "tr"
+            ? "Ücretsiz kullanım hakkını doğrulamak için internet bağlantısı gerekiyor."
+            : "An internet connection is required to verify your free usage allowance."
+        );
+        return;
+      }
+      if (billingContext && !conversionProducedOutput) {
+        await billing.releaseConversion(billingContext).catch((releaseError) => {
+          void recordInternalError("warn", [releaseError], "billing.conversion.release");
+        });
+      }
       if (conversionStartedAt) {
         await waitForMinimumElapsed(conversionStartedAt, minimumConversionLoaderMs);
       }
@@ -1609,6 +1643,8 @@ export default function App() {
     let compressionStartedAt: number | null = null;
     let progressTimer: ReturnType<typeof setInterval> | null = null;
     let completedJobForShare: ConversionJob | null = null;
+    let billingContext: BillingRequestContext | null = null;
+    let compressionProducedOutput = false;
 
     setFiles([file]);
     setInputType("pdf");
@@ -1624,6 +1660,9 @@ export default function App() {
         throw new Error("ERR_TYPE_MISMATCH");
       }
 
+      const billingAuthorization = await billing.beginConversion(`pdf_compress_${preset}`);
+      billingContext = billingAuthorization.context;
+
       compressionStartedAt = Date.now();
       setIsConverting(true);
       setProgress(0.14);
@@ -1632,7 +1671,9 @@ export default function App() {
         setProgress((current) => Math.min(0.92, current + 0.07));
       }, 260);
 
-      const result = await compressPdfFile(file, preset);
+      const result = await compressPdfFile(file, preset, billingContext ?? undefined);
+      compressionProducedOutput = true;
+      await completeBillingConversion(billingContext, billing);
       if (progressTimer) {
         clearInterval(progressTimer);
         progressTimer = null;
@@ -1656,6 +1697,26 @@ export default function App() {
       syncAccountConversionHistory(completedJob);
       completedJobForShare = completedJob;
     } catch (caught) {
+      if (caught instanceof BillingApiError && caught.code === "FREE_LIMIT_REACHED") {
+        setError(null);
+        setConversionModalVisible(false);
+        await waitForModalExit();
+        setPaywallVisible(true);
+        return;
+      }
+      if (caught instanceof BillingApiError && caught.code === "NETWORK_ERROR") {
+        setError(
+          language === "tr"
+            ? "Ücretsiz kullanım hakkını doğrulamak için internet bağlantısı gerekiyor."
+            : "An internet connection is required to verify your free usage allowance."
+        );
+        return;
+      }
+      if (billingContext && !compressionProducedOutput) {
+        await billing.releaseConversion(billingContext).catch((releaseError) => {
+          void recordInternalError("warn", [releaseError], "billing.compression.release");
+        });
+      }
       if (compressionStartedAt) {
         await waitForMinimumElapsed(compressionStartedAt, minimumConversionLoaderMs);
       }
@@ -2647,6 +2708,16 @@ export default function App() {
           onSessionEnd={handleAccountSessionEnd}
           onClose={closeAccountModal}
           onOpenLegal={openAccountLegalDocument}
+          monetizationEnabled={billing.enabled}
+          onManageSubscription={() => void billing.manageSubscription()}
+        />
+        <PaywallModal
+          visible={paywallVisible}
+          isLandscape={isLandscape}
+          language={language}
+          theme={theme}
+          billing={billing}
+          onClose={() => setPaywallVisible(false)}
         />
         <AccountLifecycleNotice
           event={accountLifecycleEvent}
@@ -3677,6 +3748,16 @@ export default function App() {
               onRenameFile={openRenameFile}
               onClearFiles={clearFiles}
             />
+            <SubscriptionStatusCard
+              compact
+              enabled={billing.enabled}
+              language={language}
+              snapshot={billing.snapshot}
+              theme={theme}
+              busy={billing.busy || billing.restoring}
+              onOpen={() => setPaywallVisible(true)}
+              onManage={() => void billing.manageSubscription()}
+            />
             <DocumentEditorCard labels={t} theme={theme} onOpen={() => void openDocumentEditor()} />
         </View>
         ) : activeTab === "archive" ? (
@@ -3840,6 +3921,17 @@ export default function App() {
               </View>
               <Feather name="chevron-right" size={18} color={theme.colors.muted} />
             </TouchableOpacity>
+
+            <SubscriptionStatusCard
+              enabled={billing.enabled}
+              language={language}
+              snapshot={billing.snapshot}
+              theme={theme}
+              busy={billing.busy || billing.restoring}
+              onOpen={() => setPaywallVisible(true)}
+              onRestore={() => void billing.restore()}
+              onManage={() => void billing.manageSubscription()}
+            />
 
             <Text style={[styles.versionText, { color: theme.colors.muted }]}>
               Editio · {t.appVersionTitle}: {t.appVersion}
@@ -5208,6 +5300,28 @@ function formatSeconds(seconds: number) {
   const wholeSeconds = Math.floor(safeSeconds % 60);
   const tenths = Math.floor((safeSeconds % 1) * 10);
   return `${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")}.${tenths}`;
+}
+
+async function completeBillingConversion(
+  context: BillingRequestContext | null,
+  billing: ReturnType<typeof useEditioBilling>
+) {
+  if (!context) return;
+  let lastError: unknown = null;
+  for (const delayMs of [0, 350, 900]) {
+    if (delayMs > 0) await waitForDelay(delayMs);
+    try {
+      await billing.completeConversion(context);
+      return;
+    } catch (caught) {
+      lastError = caught;
+    }
+  }
+  void recordInternalError(
+    "error",
+    [lastError, { authorizationId: context.authorizationId }],
+    "billing.conversion.complete"
+  );
 }
 
 function waitForMinimumElapsed(startedAt: number, minimumMs: number) {

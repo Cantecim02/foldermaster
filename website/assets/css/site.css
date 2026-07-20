@@ -1045,6 +1045,100 @@ a {
   width: min(300px, 70%);
 }
 
+.pricing-section {
+  background: #fcfbfc;
+}
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.pricing-card {
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-small);
+}
+
+.pricing-card-pro {
+  border-color: rgba(221, 42, 123, 0.42);
+  background: linear-gradient(145deg, #fff 45%, rgba(221, 42, 123, 0.07));
+}
+
+.pricing-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.pricing-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--pink-soft);
+  color: var(--pink);
+  font-size: 1.15rem;
+  font-weight: 900;
+}
+
+.pricing-label {
+  margin: 0 0 4px;
+  color: var(--pink);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pricing-card h3,
+.pricing-card p {
+  margin-top: 0;
+}
+
+.pricing-card h3 {
+  margin-bottom: 0;
+  font-size: 1.35rem;
+}
+
+.pricing-card > p,
+.pricing-list {
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.pricing-list {
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pricing-list li {
+  position: relative;
+  padding: 10px 0 10px 28px;
+  border-top: 1px solid var(--line);
+}
+
+.pricing-list li::before {
+  position: absolute;
+  left: 2px;
+  color: var(--pink);
+  font-weight: 900;
+  content: "✓";
+}
+
+.pricing-note {
+  margin-top: 22px !important;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
 .faq-list {
   max-width: 900px;
   margin: 52px auto 0;
@@ -1711,7 +1805,8 @@ body.support-dialog-open {
   .format-layout,
   .trust-layout,
   .account-layout,
-  .about-layout {
+  .about-layout,
+  .pricing-grid {
     grid-template-columns: 1fr;
     gap: 48px;
   }
@@ -1842,7 +1937,8 @@ body.support-dialog-open {
   }
 
   .feature-grid,
-  .support-grid {
+  .support-grid,
+  .pricing-grid {
     grid-template-columns: 1fr;
   }
 

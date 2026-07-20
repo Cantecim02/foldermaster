@@ -5,7 +5,12 @@ import type JSZip from "jszip";
 import { AppFile, ConvertedFile, FileType } from "../types";
 import { extensionFor, mimeByType, supportedConversions } from "./conversionTypes";
 import { detectFileTypeInfo, fileTypeFromDetection } from "./fileTypeDetector";
-import { compressUploadedPdf, convertUploadedImagesToPdf, convertUploadedMediaFile } from "./mediaDownloaderApi";
+import {
+  compressUploadedPdf,
+  convertUploadedImagesToPdf,
+  convertUploadedMediaFile,
+  type BillingUploadContext
+} from "./mediaDownloaderApi";
 import { loadPdfDocumentOnWeb } from "./pdfDocumentLoader";
 
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
@@ -26,6 +31,7 @@ type ConvertParams = {
     durationSeconds: number;
   };
   onProgress: (progress: number) => void;
+  billingContext?: BillingUploadContext;
 };
 
 type ConvertResult = {
@@ -53,7 +59,7 @@ type UdfDocument = {
 };
 
 export async function convertFiles(params: ConvertParams): Promise<ConvertResult> {
-  const { files, inputType, outputType, gifTrim, onProgress } = params;
+  const { files, inputType, outputType, gifTrim, onProgress, billingContext } = params;
   const definition = supportedConversions.find(
     (conversion) => conversion.input === inputType && conversion.output === outputType
   );
@@ -71,7 +77,7 @@ export async function convertFiles(params: ConvertParams): Promise<ConvertResult
 
   if ((inputType === "jpg" || inputType === "png") && outputType === "pdf") {
     onProgress(0.1);
-    const output = await imagesToSinglePdf(files, inputType);
+    const output = await imagesToSinglePdf(files, inputType, billingContext);
     onProgress(1);
     return { outputs: [output] };
   }
@@ -81,11 +87,11 @@ export async function convertFiles(params: ConvertParams): Promise<ConvertResult
     const file = files[index];
       const output =
         inputType === "pdf" && outputType === "udf"
-          ? await pdfToUdf(file)
+          ? await pdfToUdf(file, billingContext)
         : inputType === "udf" && isUdfDocumentOutput(outputType)
           ? await udfToDocument(file, outputType)
         : inputType === "pdf" && (outputType === "jpg" || outputType === "png")
-          ? await pdfToImages(file, outputType)
+          ? await pdfToImages(file, outputType, billingContext)
         : inputType === "txt" && outputType === "pdf"
             ? await txtToPdf(file)
           : inputType === "docx" && outputType === "pdf"
@@ -95,7 +101,7 @@ export async function convertFiles(params: ConvertParams): Promise<ConvertResult
               : inputType === "csv" && outputType === "xlsx"
                 ? await csvToXlsx(file)
                 : isBackendMediaPair(inputType, outputType)
-                  ? await backendMediaConvert(file, inputType, outputType, gifTrim)
+                  ? await backendMediaConvert(file, inputType, outputType, gifTrim, billingContext)
                   : null;
 
     if (!output) {
@@ -111,7 +117,8 @@ export async function convertFiles(params: ConvertParams): Promise<ConvertResult
 
 export async function compressPdfFile(
   file: AppFile,
-  compressionPreset: PdfCompressionPreset = "balanced"
+  compressionPreset: PdfCompressionPreset = "balanced",
+  billingContext?: BillingUploadContext
 ): Promise<PdfCompressionResult> {
   validateFiles([file], "pdf");
   const uploadFile =
@@ -125,7 +132,8 @@ export async function compressPdfFile(
   const result = await compressUploadedPdf({
     file: uploadFile,
     filename: file.name,
-    compressionPreset
+    compressionPreset,
+    billingContext
   });
 
   return {
@@ -142,7 +150,11 @@ export async function compressPdfFile(
   };
 }
 
-async function pdfToImages(file: AppFile, outputType: FileType): Promise<ConvertedFile[]> {
+async function pdfToImages(
+  file: AppFile,
+  outputType: FileType,
+  billingContext?: BillingUploadContext
+): Promise<ConvertedFile[]> {
   if (Platform.OS !== "web") {
     const result = await convertUploadedMediaFile({
       file: {
@@ -151,7 +163,8 @@ async function pdfToImages(file: AppFile, outputType: FileType): Promise<Convert
         type: file.mimeType ?? "application/pdf"
       },
       filename: file.name,
-      outputFormat: outputType as "jpg" | "png"
+      outputFormat: outputType as "jpg" | "png",
+      billingContext
     });
     const files = "files" in result ? result.files : [result];
     return files.map((item, index) => ({
@@ -184,7 +197,7 @@ async function pdfToImages(file: AppFile, outputType: FileType): Promise<Convert
   return outputs;
 }
 
-async function pdfToUdf(file: AppFile): Promise<ConvertedFile> {
+async function pdfToUdf(file: AppFile, billingContext?: BillingUploadContext): Promise<ConvertedFile> {
   const uploadFile =
     Platform.OS === "web"
       ? await readWebBlob(file.uri)
@@ -196,7 +209,8 @@ async function pdfToUdf(file: AppFile): Promise<ConvertedFile> {
   const result = await convertUploadedMediaFile({
     file: uploadFile,
     filename: file.name,
-    outputFormat: "udf"
+    outputFormat: "udf",
+    billingContext
   });
   if ("files" in result) throw new Error("ERR_CONVERSION_FAILED");
   return {
@@ -256,7 +270,11 @@ async function imageToPdf(file: AppFile, inputType: FileType): Promise<Converted
   return writeBase64Output(file.name, "pdf", outputBase64);
 }
 
-async function imagesToSinglePdf(files: AppFile[], inputType: FileType): Promise<ConvertedFile> {
+async function imagesToSinglePdf(
+  files: AppFile[],
+  inputType: FileType,
+  billingContext?: BillingUploadContext
+): Promise<ConvertedFile> {
   const sourceName = files.length === 1 ? files[0].name : "selected_images";
 
   if (Platform.OS === "web") {
@@ -290,7 +308,8 @@ async function imagesToSinglePdf(files: AppFile[], inputType: FileType): Promise
       name: file.name,
       type: file.mimeType ?? mimeByType[inputType] ?? "application/octet-stream"
     })),
-    filename: sourceName
+    filename: sourceName,
+    billingContext
   });
   return {
     name: createOutputName(sourceName, "pdf"),
@@ -575,7 +594,8 @@ async function backendMediaConvert(
   file: AppFile,
   inputType: FileType,
   outputType: FileType,
-  gifTrim?: ConvertParams["gifTrim"]
+  gifTrim?: ConvertParams["gifTrim"],
+  billingContext?: BillingUploadContext
 ): Promise<ConvertedFile> {
   const uploadFile =
     Platform.OS === "web"
@@ -590,7 +610,8 @@ async function backendMediaConvert(
     filename: file.name,
     outputFormat: outputType as "mp3" | "mp4" | "gif" | "jpg" | "png" | "webp" | "wav" | "udf",
     trimStartSeconds: outputType === "gif" ? gifTrim?.startSeconds : undefined,
-    trimDurationSeconds: outputType === "gif" ? gifTrim?.durationSeconds : undefined
+    trimDurationSeconds: outputType === "gif" ? gifTrim?.durationSeconds : undefined,
+    billingContext
   });
   if ("files" in result) throw new Error("ERR_CONVERSION_FAILED");
   return {
