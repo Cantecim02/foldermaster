@@ -66,6 +66,8 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   const [isBusy, setIsBusy] = useState(false);
   const [busyMode, setBusyMode] = useState<"extract" | "compress" | null>(null);
   const [archiveErrorCode, setArchiveErrorCode] = useState<keyof typeof translations.en.archive.errors | null>(null);
+  const activeExtractionController = useRef<AbortController | null>(null);
+  const busyRef = useRef(false);
   const fade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -79,6 +81,10 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
 
   useEffect(() => {
     void refreshZippedOutputs();
+    return () => {
+      activeExtractionController.current?.abort();
+      activeExtractionController.current = null;
+    };
   }, []);
 
   const refreshZippedOutputs = async () => {
@@ -134,6 +140,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   };
 
   const extractSelectedArchive = async (selectedArchive: AppFile | null) => {
+    if (busyRef.current) return;
     if (!selectedArchive) {
       setArchiveErrorCode("noArchive");
       return;
@@ -151,8 +158,11 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
 
     let extractedOutputs: ExtractedArchiveFile[] | null = null;
     let deferredErrorCode: keyof typeof translations.en.archive.errors | null = null;
+    const extractionController = new AbortController();
+    activeExtractionController.current = extractionController;
     const startedAt = Date.now();
     try {
+      busyRef.current = true;
       setIsBusy(true);
       setBusyMode("extract");
       setArchiveErrorCode(null);
@@ -161,13 +171,14 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
       await waitForUiFrame();
       const outputs = await extractArchive(
         selectedArchive,
-        createThrottledProgressReporter(setProgress)
+        createThrottledProgressReporter(setProgress),
+        { signal: extractionController.signal }
       );
       extractedOutputs = outputs;
       setExtractedResultFiles(outputs);
     } catch (caught) {
       const errorCode = getArchiveErrorCode(caught);
-      if (errorCode !== "unsupported") {
+      if (errorCode !== "unsupported" && errorCode !== "cancelled") {
         void recordInternalError(
           "error",
           [caught, { feature: "archive", operation: "extract", file: selectedArchive.name }],
@@ -178,6 +189,8 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
     } finally {
       await waitForMinimumElapsed(startedAt, minimumArchiveLoaderMs);
       if (extractedOutputs?.length) setProgress(1);
+      activeExtractionController.current = null;
+      busyRef.current = false;
       setIsBusy(false);
       setBusyMode(null);
       await waitForModalExit();
@@ -238,10 +251,12 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   }, [quickIntent?.id, onQuickIntentConsumed]);
 
   const compressSelectedFiles = async (selectedFiles: AppFile[], options?: { clearSelection?: boolean }) => {
+    if (busyRef.current) return;
     let createdOutput: ConvertedFile | null = null;
     let deferredErrorCode: keyof typeof translations.en.archive.errors | null = null;
     const startedAt = Date.now();
     try {
+      busyRef.current = true;
       setIsBusy(true);
       setBusyMode("compress");
       setArchiveErrorCode(null);
@@ -269,6 +284,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
     } finally {
       await waitForMinimumElapsed(startedAt, minimumArchiveLoaderMs);
       if (createdOutput) setProgress(1);
+      busyRef.current = false;
       setIsBusy(false);
       setBusyMode(null);
       await waitForModalExit();
@@ -346,6 +362,9 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
   };
 
   const archiveCanExtract = canExtractArchive(archive);
+  const cancelExtraction = () => {
+    activeExtractionController.current?.abort();
+  };
 
   return (
     <Animated.View
@@ -367,6 +386,7 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
         presentationStyle="overFullScreen"
         statusBarTranslucent
         supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
+        onRequestClose={busyMode === "extract" ? cancelExtraction : undefined}
       >
         <View style={[styles.loaderOverlay, isLandscape && styles.loaderOverlayLandscape]}>
           <View style={[styles.loaderWrap, isLandscape && styles.loaderWrapLandscape]}>
@@ -377,6 +397,15 @@ export function ArchiveManager({ labels, theme, quickIntent, onQuickIntentConsum
               letterText={labels.generating}
               subtitle={labels.preparingOutput}
             />
+            {busyMode === "extract" ? (
+              <AnimatedPressable
+                style={[styles.loaderCancelButton, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}
+                onPress={cancelExtraction}
+              >
+                <Feather name="x" size={17} color={theme.colors.text} />
+                <Text style={[styles.loaderCancelText, { color: theme.colors.text }]}>{labels.cancel}</Text>
+              </AnimatedPressable>
+            ) : null}
           </View>
         </View>
       </MotionModal>
@@ -749,7 +778,8 @@ function ArchiveResultFileSummary({
 }
 
 function getArchiveErrorCode(caught: unknown): keyof typeof translations.en.archive.errors {
-  const message = caught instanceof Error ? caught.message : "";
+  const error = caught as { code?: unknown; message?: unknown } | null;
+  const message = `${typeof error?.code === "string" ? error.code : ""} ${typeof error?.message === "string" ? error.message : ""}`;
   if (message.includes("ERR_ARCHIVE_NATIVE_REQUIRED")) return "nativeRequired";
   if (message.includes("ERR_ARCHIVE_FORMAT_UNSUPPORTED")) return "unsupported";
   if (message.includes("ERR_ARCHIVE_EMPTY")) return "empty";
@@ -758,6 +788,13 @@ function getArchiveErrorCode(caught: unknown): keyof typeof translations.en.arch
   if (message.includes("ERR_ARCHIVE_ZIP64")) return "zip64";
   if (message.includes("ERR_ARCHIVE_NO_FILES")) return "noFiles";
   if (message.includes("ERR_ARCHIVE_TOO_LARGE")) return "tooLarge";
+  if (message.includes("ERR_ARCHIVE_INSUFFICIENT_DISK")) return "insufficientDisk";
+  if (message.includes("ERR_ARCHIVE_UNSAFE_PATH")) return "unsafePath";
+  if (message.includes("ERR_ARCHIVE_ZIP_BOMB")) return "zipBomb";
+  if (message.includes("ERR_ARCHIVE_UNSUPPORTED_COMPRESSION")) return "unsupportedCompression";
+  if (message.includes("ERR_ARCHIVE_CANCELLED")) return "cancelled";
+  if (message.includes("ERR_ARCHIVE_DUPLICATE_OPERATION")) return "duplicateOperation";
+  if (message.includes("ERR_ARCHIVE_NATIVE_FAILURE") || message.includes("ERR_ARCHIVE_INVALID_POLICY")) return "nativeFailure";
   if (message.includes("ERR_ARCHIVE_UNSUPPORTED")) return "unsupported";
   if (message.includes("ERR_FILE_READ_FAILED")) return "readFailed";
   return "failed";
@@ -813,6 +850,22 @@ const styles = StyleSheet.create({
   },
   loaderWrapLandscape: {
     maxWidth: 330
+  },
+  loaderCancelButton: {
+    alignItems: "center",
+    alignSelf: "center",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 7,
+    justifyContent: "center",
+    marginTop: 12,
+    minHeight: 46,
+    paddingHorizontal: 22
+  },
+  loaderCancelText: {
+    fontSize: 14,
+    fontWeight: "900"
   },
   resultOverlay: {
     alignItems: "center",

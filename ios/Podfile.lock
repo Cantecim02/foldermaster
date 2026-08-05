@@ -21,6 +21,9 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - EditioArchiveExtractor (1.0.0):
+    - ExpoModulesCore
+    - ZIPFoundation (~> 0.9.20)
   - EXApplication (7.0.8):
     - ExpoModulesCore
   - EXConstants (18.0.13):
@@ -2245,9 +2248,11 @@ PODS:
     - libwebp (~> 1.0)
     - SDWebImage/Core (~> 5.17)
   - Yoga (0.0.0)
+  - ZIPFoundation (0.9.20)
 
 DEPENDENCIES:
   - DocumentScanner (from `../node_modules/react-native-document-scanner-plugin`)
+  - EditioArchiveExtractor (from `../modules/editio-archive-extractor/ios`)
   - EXApplication (from `../node_modules/expo-application/ios`)
   - EXConstants (from `../node_modules/expo-constants/ios`)
   - EXImageLoader (from `../node_modules/expo-image-loader/ios`)
@@ -2364,10 +2369,13 @@ SPEC REPOS:
     - SDWebImageAVIFCoder
     - SDWebImageSVGCoder
     - SDWebImageWebPCoder
+    - ZIPFoundation
 
 EXTERNAL SOURCES:
   DocumentScanner:
     :path: "../node_modules/react-native-document-scanner-plugin"
+  EditioArchiveExtractor:
+    :path: "../modules/editio-archive-extractor/ios"
   EXApplication:
     :path: "../node_modules/expo-application/ios"
   EXConstants:
@@ -2580,6 +2588,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   DocumentScanner: 8409e7cb95cfea9c445c36886c4adc9a927973aa
+  EditioArchiveExtractor: 22e19066101dd47751f7a6af3bbfa79e0b091bc8
   EXApplication: 1e98d4b1dccdf30627f92917f4b2c5a53c330e5f
   EXConstants: fce59a631a06c4151602843667f7cfe35f81e271
   EXImageLoader: 189e3476581efe3ad4d1d3fb4735b7179eb26f05
@@ -2692,6 +2701,7 @@ SPEC CHECKSUMS:
   SDWebImageSVGCoder: 15a300a97ec1c8ac958f009c02220ac0402e936c
   SDWebImageWebPCoder: e38c0a70396191361d60c092933e22c20d5b1380
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
+  ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
 
 PODFILE CHECKSUM: ed2ca25a529de66880678ece3d09c725a5485cdb
 

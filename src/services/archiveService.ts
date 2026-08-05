@@ -1,6 +1,14 @@
 import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 import JSZip from "jszip";
+import {
+  addArchiveProgressListener,
+  cancelNativeZipExtraction,
+  cleanupAbandonedNativeExtractions,
+  extractZipNative,
+  isNativeArchiveExtractorAvailable
+} from "editio-archive-extractor";
+import { archiveLimits } from "../config/archiveLimits";
 import { AppFile, ConvertedFile } from "../types";
 import { routeFileForOperation } from "./fileRouter";
 
@@ -10,8 +18,12 @@ export type ExtractedArchiveFile = ConvertedFile & {
 
 type ArchiveProgress = (progress: number) => void;
 
+type ArchiveExtractionOptions = {
+  signal?: AbortSignal;
+};
+
 const archiveDir = `${FileSystem.documentDirectory ?? ""}archives/`;
-const maxMobileZipInputBytes = 80 * 1024 * 1024;
+let nativeCleanupPromise: Promise<number> | null = null;
 
 export class UnsupportedArchiveError extends Error {
   code = "ERR_ARCHIVE_UNSUPPORTED" as const;
@@ -40,7 +52,11 @@ export class NativeArchiveRequiredError extends Error {
   }
 }
 
-export async function extractArchive(file: AppFile, onProgress: ArchiveProgress) {
+export async function extractArchive(
+  file: AppFile,
+  onProgress: ArchiveProgress,
+  options: ArchiveExtractionOptions = {}
+) {
   const route = routeFileForOperation(file, "archive.extract");
   if (!route.canStart) {
     if (route.reason === "native-required") {
@@ -55,7 +71,7 @@ export async function extractArchive(file: AppFile, onProgress: ArchiveProgress)
   const extension = route.detection.fileType ?? route.detection.normalizedExtension;
 
   if (extension === "zip") {
-    return extractZip(file, onProgress);
+    return extractZip(file, onProgress, options);
   }
 
   if (extension === "tar") {
@@ -112,19 +128,82 @@ function assertMobileZipPayload(files: AppFile[]) {
   if (Platform.OS === "web") return;
   const knownTotalBytes = files.reduce((total, file) => total + (file.size ?? 0), 0);
   const largestKnownFile = Math.max(0, ...files.map((file) => file.size ?? 0));
-  if (knownTotalBytes > maxMobileZipInputBytes || largestKnownFile > maxMobileZipInputBytes) {
+  if (
+    knownTotalBytes > archiveLimits.fallbackMobileZipInputBytes ||
+    largestKnownFile > archiveLimits.fallbackMobileZipInputBytes
+  ) {
     throw new Error("ERR_ARCHIVE_TOO_LARGE");
   }
 }
 
 function assertMobileBase64Size(base64: string) {
   const estimatedBytes = Math.floor((base64.length * 3) / 4);
-  if (estimatedBytes > maxMobileZipInputBytes) {
+  if (estimatedBytes > archiveLimits.fallbackMobileZipInputBytes) {
     throw new Error("ERR_ARCHIVE_TOO_LARGE");
   }
 }
 
-async function extractZip(file: AppFile, onProgress: ArchiveProgress): Promise<ExtractedArchiveFile[]> {
+async function extractZip(
+  file: AppFile,
+  onProgress: ArchiveProgress,
+  options: ArchiveExtractionOptions
+): Promise<ExtractedArchiveFile[]> {
+  if (Platform.OS === "ios") {
+    return extractZipOnIOS(file, onProgress, options);
+  }
+
+  if (Platform.OS !== "web") {
+    await assertJavaScriptFallbackZipSize(file);
+  }
+
+  return extractZipInJavaScript(file, onProgress, options);
+}
+
+async function extractZipOnIOS(
+  file: AppFile,
+  onProgress: ArchiveProgress,
+  options: ArchiveExtractionOptions
+): Promise<ExtractedArchiveFile[]> {
+  if (!isNativeArchiveExtractorAvailable()) {
+    throw new NativeArchiveRequiredError();
+  }
+  if (options.signal?.aborted) throw archiveError("ERR_ARCHIVE_CANCELLED");
+
+  nativeCleanupPromise ??= cleanupAbandonedNativeExtractions(
+    archiveLimits.staleExtractionMaxAgeSeconds
+  ).catch(() => 0);
+  await nativeCleanupPromise;
+
+  const operationId = createArchiveOperationId();
+  const progressSubscription = addArchiveProgressListener((event) => {
+    if (event.operationId === operationId) onProgress(event.progress);
+  });
+  const abortHandler = () => {
+    void cancelNativeZipExtraction(operationId);
+  };
+  options.signal?.addEventListener("abort", abortHandler, { once: true });
+
+  try {
+    const outputs = await extractZipNative(file.uri, operationId, archiveLimits);
+    return outputs.map((output) => ({
+      mimeType: output.mimeType,
+      name: output.name,
+      size: output.size,
+      uri: output.uri
+    }));
+  } catch (caught) {
+    throw normalizeArchiveError(caught);
+  } finally {
+    progressSubscription?.remove();
+    options.signal?.removeEventListener("abort", abortHandler);
+  }
+}
+
+async function extractZipInJavaScript(
+  file: AppFile,
+  onProgress: ArchiveProgress,
+  options: ArchiveExtractionOptions
+): Promise<ExtractedArchiveFile[]> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(await readBytes(file.uri));
@@ -137,6 +216,7 @@ async function extractZip(file: AppFile, onProgress: ArchiveProgress): Promise<E
 
   const outputs: ExtractedArchiveFile[] = [];
   for (let index = 0; index < entries.length; index += 1) {
+    if (options.signal?.aborted) throw archiveError("ERR_ARCHIVE_CANCELLED");
     const entry = entries[index];
     let bytes: Uint8Array;
     try {
@@ -149,6 +229,24 @@ async function extractZip(file: AppFile, onProgress: ArchiveProgress): Promise<E
   }
 
   return outputs;
+}
+
+async function assertJavaScriptFallbackZipSize(file: AppFile) {
+  let size = file.size ?? 0;
+  if (!size) {
+    const info = await FileSystem.getInfoAsync(file.uri);
+    if (!info.exists || info.isDirectory) throw archiveError("ERR_FILE_READ_FAILED");
+    size = info.size ?? 0;
+  }
+  if (!size) throw archiveError("ERR_FILE_READ_FAILED");
+  if (size > archiveLimits.fallbackMobileZipInputBytes) {
+    throw archiveError("ERR_ARCHIVE_TOO_LARGE");
+  }
+}
+
+function createArchiveOperationId() {
+  const suffix = Math.random().toString(36).slice(2, 14);
+  return `${Date.now()}-${suffix}`;
 }
 
 async function extractTar(file: AppFile, onProgress: ArchiveProgress): Promise<ExtractedArchiveFile[]> {
@@ -285,6 +383,22 @@ function mapZipError(caught: unknown) {
     return new Error("ERR_ARCHIVE_ZIP64");
   }
   return new Error("ERR_ARCHIVE_FAILED");
+}
+
+function normalizeArchiveError(caught: unknown) {
+  const error = caught as { code?: unknown; message?: unknown } | null;
+  const values = [error?.code, error?.message].filter((value): value is string => typeof value === "string");
+  for (const value of values) {
+    const match = value.match(/ERR_(?:ARCHIVE_[A-Z_]+|FILE_READ_FAILED)/)?.[0];
+    if (match) return archiveError(match);
+  }
+  return archiveError("ERR_ARCHIVE_FAILED");
+}
+
+function archiveError(code: string) {
+  const error = new Error(code) as Error & { code: string };
+  error.code = code;
+  return error;
 }
 
 function base64ToUint8Array(base64: string) {

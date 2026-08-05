@@ -323,7 +323,6 @@ const styles = StyleSheet.create({
   fillClip: {
     borderRadius: 999,
     height: "100%",
-    minWidth: 12,
     overflow: "hidden"
   },
   fill: {
