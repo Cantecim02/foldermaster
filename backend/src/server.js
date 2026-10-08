@@ -108,7 +108,7 @@ app.use((error, request, response, next) => {
   response.status(status).json(withRequestId(createErrorPayload(error, { includeDetails: !config.isProduction }), request));
 });
 
-const server = app.listen(config.port, () => {
+const server = app.listen(config.port, config.bindHost, () => {
   console.log(`Media backend listening on ${config.publicBaseUrl}`);
 });
 server.requestTimeout = 11 * 60 * 1000;

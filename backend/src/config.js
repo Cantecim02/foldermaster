@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { isIP } from "node:net";
 
 dotenv.config({ quiet: true });
 
@@ -51,6 +52,24 @@ function readBoolean(name, fallback = false) {
 
 function readString(name, fallback = "") {
   return process.env[name]?.trim() || fallback;
+}
+
+function readBindHost() {
+  const host = process.env.BIND_HOST;
+  // Keep production private by default while preserving Expo/LAN development.
+  if (host === undefined) return isProduction ? "127.0.0.1" : "0.0.0.0";
+  if (isIP(host)) return host;
+
+  const hostname = host.endsWith(".") ? host.slice(0, -1) : host;
+  const validHostname = hostname.length > 0 && hostname.length <= 253 && hostname === hostname.trim() &&
+    !/^[\d.]+$/.test(hostname) &&
+    hostname.split(".").every((label) =>
+      /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)
+    );
+  if (!validHostname) {
+    throw new Error("BIND_HOST must be a valid IPv4 address, IPv6 address, or hostname (without a URL or port).");
+  }
+  return host;
 }
 
 function readAppleEnvironments() {
@@ -107,6 +126,7 @@ function isLocalOrPrivateHost(hostname) {
 export const config = {
   isProduction,
   port,
+  bindHost: readBindHost(),
   publicBaseUrl: normalizeBaseUrl(process.env.PUBLIC_BASE_URL?.trim()),
   downloadDir,
   databasePath: path.resolve(rootDir, process.env.DATABASE_PATH ?? "data/editio.sqlite"),

@@ -12,7 +12,8 @@ import path from "node:path";
 import { EventEmitter, once } from "node:events";
 import childProcess from "node:child_process";
 import { convertUploadedFile } from "../src/services/uploadConvertService.js";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { JobQueue } from "../src/services/jobQueue.js";
@@ -479,6 +480,41 @@ test("production startup rejects plain HTTP, localhost, and private LAN public U
   await assertRejectsProductionBaseUrl("https://192.168.1.10");
 });
 
+test("production defaults to loopback and development defaults to LAN binding", async () => {
+  await withBindHostConfig((readConfig) => {
+    assert.equal(readConfig("production").stdout.trim(), "127.0.0.1");
+    assert.equal(readConfig("development").stdout.trim(), "0.0.0.0");
+  });
+});
+
+test("BIND_HOST overrides accept IPv4, IPv6, and valid hostnames", async () => {
+  await withBindHostConfig((readConfig) => {
+    for (const mode of ["production", "development"]) {
+      for (const host of ["127.0.0.1", "0.0.0.0", "::1", "::", "::ffff:127.0.0.1", "localhost", "api-1.example.com", "localhost."]) {
+        const result = readConfig(mode, host);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), host);
+      }
+    }
+  });
+});
+
+test("BIND_HOST rejects empty values, malformed hosts, URLs, and ports", async () => {
+  await withBindHostConfig((readConfig) => {
+    for (const host of ["", " ", " 127.0.0.1 ", "http://localhost", "localhost:4000", "[::1]", "[::1]:4000", "999.1.1.1", "127.1", "-host", "host-", "bad_host", "a..b", "*", "host/path", "host\nname", "host\n", "a".repeat(64), `${"a.".repeat(127)}a`]) {
+      const result = readConfig("production", host);
+      assert.notEqual(result.status, 0, `Accepted invalid BIND_HOST: ${JSON.stringify(host)}`);
+      assert.match(result.stderr, /BIND_HOST must be a valid/);
+    }
+  });
+});
+
+test("backend starts with an explicit loopback bind override", async () => {
+  await withServer(async ({ baseUrl }) => {
+    assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
+  }, { BIND_HOST: "127.0.0.1" });
+});
+
 test("production error responses do not expose stack traces", async () => {
   await withServer(async ({ baseUrl }) => {
     const response = await uploadFile(baseUrl, "/convert-file", {
@@ -627,6 +663,29 @@ async function assertRejectsProductionBaseUrl(publicBaseUrl) {
     assert.notEqual(code, 0);
   } finally {
     await rm(downloadDir, { recursive: true, force: true });
+  }
+}
+
+async function withBindHostConfig(run) {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "editio-bind-config-"));
+  const configUrl = pathToFileURL(path.join(backendRoot, "src/config.js")).href;
+  try {
+    run((mode, host) => {
+      const env = {
+        ...process.env,
+        NODE_ENV: mode,
+        PUBLIC_BASE_URL: "https://api.example.com",
+        MONETIZATION_ENABLED: "false"
+      };
+      delete env.BIND_HOST;
+      if (host !== undefined) env.BIND_HOST = host;
+      return spawnSync(process.execPath, [
+        "--input-type=module", "--eval",
+        `import { config } from ${JSON.stringify(configUrl)}; console.log(config.bindHost);`
+      ], { cwd, env, encoding: "utf8" });
+    });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
   }
 }
 
