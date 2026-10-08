@@ -24,7 +24,7 @@ export function isActiveFile(filePath) {
 export function createOperationTracker() {
   const releaseFns = [];
   const cleanupTargets = new Set();
-  let closed = false;
+  let closePromise;
 
   return {
     trackInput(filePath) {
@@ -39,16 +39,17 @@ export function createOperationTracker() {
     keepOutput(filePath) {
       cleanupTargets.delete(path.resolve(filePath));
     },
-    async close({ keepOutputs = false } = {}) {
-      if (closed) return;
-      closed = true;
-      if (!keepOutputs) {
-        await Promise.allSettled(
-          [...cleanupTargets].map((target) => safeRemoveFile(target))
-        );
-      }
-      for (const release of releaseFns.splice(0)) release();
-      cleanupTargets.clear();
+    close({ keepOutputs = false } = {}) {
+      closePromise ??= (async () => {
+        try {
+          // Owned outputs remain protected from the TTL sweeper during removal.
+          if (!keepOutputs) await Promise.allSettled([...cleanupTargets].map(removeOwnedFile));
+        } finally {
+          for (const release of releaseFns.splice(0)) release();
+          cleanupTargets.clear();
+        }
+      })();
+      return closePromise;
     }
   };
 }
@@ -56,7 +57,15 @@ export function createOperationTracker() {
 export async function safeRemoveFile(filePath) {
   if (!filePath) return;
   if (isActiveFile(filePath)) return;
-  await rm(filePath, { force: true }).catch(() => {});
+  await removeOwnedFile(filePath);
+}
+
+async function removeOwnedFile(filePath) {
+  try {
+    await rm(filePath, { force: true });
+  } catch (error) {
+    console.warn(`[cleanup] file removal failed: ${error.code ?? "UNKNOWN"}`);
+  }
 }
 
 export async function cleanupExpiredFiles({

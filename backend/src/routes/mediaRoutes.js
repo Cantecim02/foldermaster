@@ -36,6 +36,7 @@ mediaRoutes.post("/convert-file", requireConversionClientCompatibility, upload.s
   let conversionAccess;
   if (request.file) tracker.trackInput(request.file.path);
   let keepOutputs = false;
+  let conversionError;
   try {
     if (!request.file) {
       throw new HttpError(400, "File is required.");
@@ -70,13 +71,18 @@ mediaRoutes.post("/convert-file", requireConversionClientCompatibility, upload.s
     response.json(result);
     keepOutputs = true;
   } catch (error) {
-    conversionAccess?.release();
-    next(error);
+    conversionError = error;
+    try {
+      (conversionAccess ?? request.editioConversionAccess)?.release();
+    } catch (releaseError) {
+      console.warn(`[conversion] authorization release failed: ${releaseError.code ?? "UNKNOWN"}`);
+    }
   } finally {
     await tracker.close({ keepOutputs });
     await cleanupUploadedFiles(request.file);
     requestContext.close();
   }
+  if (conversionError) next(conversionError);
 });
 
 mediaRoutes.post("/convert-images-to-pdf", requireConversionClientCompatibility, upload.array("files", config.maxFilesPerRequest), async (request, response, next) => {
@@ -86,6 +92,7 @@ mediaRoutes.post("/convert-images-to-pdf", requireConversionClientCompatibility,
   const files = Array.isArray(request.files) ? request.files : [];
   for (const file of files) tracker.trackInput(file.path);
   let keepOutputs = false;
+  let conversionError;
   try {
     if (!files.length) {
       throw new HttpError(400, "At least one image file is required.");
@@ -103,13 +110,18 @@ mediaRoutes.post("/convert-images-to-pdf", requireConversionClientCompatibility,
     response.json(result);
     keepOutputs = true;
   } catch (error) {
-    conversionAccess?.release();
-    next(error);
+    conversionError = error;
+    try {
+      (conversionAccess ?? request.editioConversionAccess)?.release();
+    } catch (releaseError) {
+      console.warn(`[conversion] authorization release failed: ${releaseError.code ?? "UNKNOWN"}`);
+    }
   } finally {
     await tracker.close({ keepOutputs });
     await cleanupUploadedFiles(files);
     requestContext.close();
   }
+  if (conversionError) next(conversionError);
 });
 
 mediaRoutes.post("/compress-pdf", requireConversionClientCompatibility, upload.single("file"), async (request, response, next) => {
@@ -118,6 +130,7 @@ mediaRoutes.post("/compress-pdf", requireConversionClientCompatibility, upload.s
   let conversionAccess;
   if (request.file) tracker.trackInput(request.file.path);
   let keepOutputs = false;
+  let conversionError;
   try {
     if (!request.file) {
       throw new HttpError(400, "File is required.");
@@ -142,13 +155,18 @@ mediaRoutes.post("/compress-pdf", requireConversionClientCompatibility, upload.s
     response.json(result);
     keepOutputs = true;
   } catch (error) {
-    conversionAccess?.release();
-    next(error);
+    conversionError = error;
+    try {
+      (conversionAccess ?? request.editioConversionAccess)?.release();
+    } catch (releaseError) {
+      console.warn(`[conversion] authorization release failed: ${releaseError.code ?? "UNKNOWN"}`);
+    }
   } finally {
     await tracker.close({ keepOutputs });
     await cleanupUploadedFiles(request.file);
     requestContext.close();
   }
+  if (conversionError) next(conversionError);
 });
 
 mediaRoutes.get("/files/:filename", async (request, response, next) => {
@@ -201,6 +219,7 @@ function createRequestContext(request, response) {
   const abort = () => {
     if (!response.writableEnded) controller.abort(new Error("client aborted"));
   };
+  if (request.aborted || response.destroyed) abort();
   request.on("aborted", abort);
   response.on("close", abort);
   return {

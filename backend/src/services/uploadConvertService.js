@@ -46,10 +46,11 @@ export async function convertUploadedFile({ file, outputFormat, trimOptions, con
   try {
     await runFfmpeg(file.path, outputPath, safeFormat, trimOptions, context.signal);
   } catch (error) {
-    await rm(outputPath, { force: true });
+    await rm(outputPath, { force: true }).catch((cleanupError) => {
+      console.warn(`[cleanup] output removal failed: ${cleanupError.code ?? "UNKNOWN"}`);
+    });
     throw error;
   }
-  context.tracker?.keepOutput(outputPath);
 
   return {
     fileUrl: `${config.publicBaseUrl}/files/${outputName}`,
@@ -93,7 +94,6 @@ export async function convertUploadedImagesToPdf({ files, context = {} }) {
   const outputName = `upload_${id}.pdf`;
   const outputPath = trackOutput(path.join(config.downloadDir, outputName), context);
   await writeFile(outputPath, await pdf.save());
-  context.tracker?.keepOutput(outputPath);
 
   return {
     fileUrl: `${config.publicBaseUrl}/files/${outputName}`,
@@ -143,10 +143,11 @@ export async function compressUploadedPdf({ file, compressionPreset = "balanced"
     assertNotAborted(context.signal);
     await writeFile(outputPath, finalBytes);
   } catch (error) {
-    await rm(outputPath, { force: true });
+    await rm(outputPath, { force: true }).catch((cleanupError) => {
+      console.warn(`[cleanup] output removal failed: ${cleanupError.code ?? "UNKNOWN"}`);
+    });
     throw error;
   }
-  context.tracker?.keepOutput(outputPath);
 
   const compressedBytes = finalBytes.byteLength;
   const savedBytes = Math.max(0, originalBytes.byteLength - compressedBytes);
@@ -176,7 +177,6 @@ async function convertPdfToUdf(inputPath, originalName, id, context) {
   const outputPath = trackOutput(path.join(config.downloadDir, filename), context);
   assertNotAborted(context.signal);
   await writeFile(outputPath, buildUdfDocument({ sourceName: sanitizeSourceName(originalName), text }), "utf8");
-  context.tracker?.keepOutput(outputPath);
   return filename;
 }
 
@@ -367,7 +367,6 @@ async function convertStillImage(inputPath, id, outputFormat, context = {}) {
         ? canvas.toBuffer("image/webp", 0.88)
         : canvas.toBuffer("image/png");
   await writeFile(outputPath, buffer);
-  context.tracker?.keepOutput(outputPath);
   return filename;
 }
 
@@ -415,7 +414,6 @@ async function renderPdfToImages(inputPath, id, outputFormat, context = {}) {
           ? canvas.toBuffer("image/jpeg", 0.92)
           : canvas.toBuffer("image/png");
       await writeFile(imagePath, buffer);
-      context.tracker?.keepOutput(imagePath);
       files.push(filename);
     }
   } catch (error) {
@@ -436,23 +434,28 @@ function runFfmpeg(inputPath, outputPath, outputFormat, trimOptions, signal) {
     const args = buildArgs(inputPath, outputPath, outputFormat, trimOptions);
 
     const child = spawn(config.ffmpegPath, args, { shell: false, windowsHide: true });
+    let killTimer;
+    let engineError;
     const onAbort = () => {
       child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
-      }, 1500).unref?.();
-      reject(cancelledError());
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 1500);
+      killTimer.unref?.();
+      // Wait for process close before removing files, including on Windows.
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     child.stderr.on("data", () => {});
     child.on("error", () => {
-      signal?.removeEventListener("abort", onAbort);
-      reject(new HttpError(500, "Conversion engine could not be started.", { expose: false }));
+      engineError = new HttpError(500, "Conversion engine could not be started.", { expose: false });
     });
     child.on("close", (code) => {
+      clearTimeout(killTimer);
       signal?.removeEventListener("abort", onAbort);
       if (signal?.aborted) {
         reject(cancelledError());
+        return;
+      }
+      if (engineError) {
+        reject(engineError);
         return;
       }
       if (code !== 0) {

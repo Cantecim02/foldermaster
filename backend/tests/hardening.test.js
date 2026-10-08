@@ -1,14 +1,22 @@
 import test from "node:test";
+import express from "express";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { HttpError } from "../src/utils/httpError.js";
+import { mediaRoutes } from "../src/routes/mediaRoutes.js";
+import { conversionQueue } from "../src/services/conversionJobQueue.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
+import childProcess from "node:child_process";
+import { convertUploadedFile } from "../src/services/uploadConvertService.js";
 import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { JobQueue } from "../src/services/jobQueue.js";
-import { cleanupExpiredFiles, markActiveFile } from "../src/services/fileCleanupService.js";
+import { createOperationTracker, isActiveFile, cleanupExpiredFiles, markActiveFile } from "../src/services/fileCleanupService.js";
 
 const backendRoot = path.resolve(import.meta.dirname, "..");
 const tinyPng = Buffer.from(
@@ -105,7 +113,7 @@ test("support request reports unavailable mail configuration without exposing de
 });
 
 test("valid PDF content is accepted for PDF to UDF", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const response = await uploadFile(baseUrl, "/convert-file", {
       field: "file",
       bytes: await makePdfBytes(),
@@ -116,11 +124,12 @@ test("valid PDF content is accepted for PDF to UDF", async () => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.match(body.filename, /\.udf$/);
+    assert.equal((await fetch(`${baseUrl}/files/${body.filename}`)).status, 200);
   });
 });
 
 test("non-PDF content renamed to .pdf is rejected", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const response = await uploadFile(baseUrl, "/convert-file", {
       field: "file",
       bytes: Buffer.from("not a real pdf"),
@@ -133,22 +142,24 @@ test("non-PDF content renamed to .pdf is rejected", async () => {
     assert.equal(body.success, false);
     assert.match(body.code, /UNSUPPORTED_FILE_TYPE|INVALID_FILE_CONTENT/);
     assert.equal("stack" in body, false);
+    assert.equal((await listFiles(downloadDir)).some((name) => name.startsWith("uploads/")), false);
   });
 });
 
 test("invalid image content is rejected before image-to-PDF conversion", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const form = new FormData();
     form.append("files", new Blob([Buffer.from("not png")], { type: "image/png" }), "bad.png");
     const response = await fetch(`${baseUrl}/convert-images-to-pdf`, { method: "POST", body: form });
     const body = await response.json();
     assert.equal(response.status, 415);
     assert.equal(body.success, false);
+    assert.equal((await listFiles(downloadDir)).some((name) => name.startsWith("uploads/")), false);
   });
 });
 
 test("invalid PDF compression preset is rejected", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const response = await uploadFile(baseUrl, "/compress-pdf", {
       field: "file",
       bytes: await makePdfBytes(),
@@ -159,6 +170,7 @@ test("invalid PDF compression preset is rejected", async () => {
     const body = await response.json();
     assert.equal(response.status, 400);
     assert.equal(body.success, false);
+    assert.equal((await listFiles(downloadDir)).some((name) => name.startsWith("uploads/")), false);
   });
 });
 
@@ -179,7 +191,7 @@ test("valid PDF compression preset is applied", async () => {
 });
 
 test("oversized upload returns 413", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const bytes = Buffer.concat([tinyPng, Buffer.alloc(1024 * 1024 + 10)]);
     const response = await uploadFile(baseUrl, "/convert-file", {
       field: "file",
@@ -191,11 +203,12 @@ test("oversized upload returns 413", async () => {
     const body = await response.json();
     assert.equal(response.status, 413);
     assert.equal(body.code, "FILE_TOO_LARGE");
+    assert.equal((await listFiles(downloadDir)).some((name) => name.startsWith("uploads/")), false);
   }, { MAX_INPUT_MB: "1" });
 });
 
 test("too many uploaded files are rejected", async () => {
-  await withServer(async ({ baseUrl }) => {
+  await withServer(async ({ baseUrl, downloadDir }) => {
     const form = new FormData();
     for (let index = 0; index < 3; index += 1) {
       form.append("files", new Blob([tinyPng], { type: "image/png" }), `image-${index}.png`);
@@ -204,6 +217,7 @@ test("too many uploaded files are rejected", async () => {
     const body = await response.json();
     assert.equal(response.status, 413);
     assert.equal(body.code, "TOO_MANY_FILES");
+    assert.equal((await listFiles(downloadDir)).some((name) => name.startsWith("uploads/")), false);
   }, { MAX_FILES_PER_REQUEST: "2" });
 });
 
@@ -221,6 +235,193 @@ test("failed conversions clean partial output files", async () => {
     assert.equal(files.some((name) => name.endsWith(".wav")), false);
     assert.equal(files.some((name) => name.startsWith("uploads/")), false);
   });
+});
+
+for (const mode of ["cancelled", "queue-error", "cleanup-error"]) {
+  test(`${mode}: error middleware waits for upload cleanup without masking the error`, async (t) => {
+    const removalStarted = Promise.withResolvers();
+    const allowRemoval = Promise.withResolvers();
+    const originalRm = fsPromises.rm;
+    let input;
+    let errorHandled = false;
+    const app = express();
+    app.use(mediaRoutes);
+    app.use((error, _request, response, _next) => {
+      errorHandled = true;
+      response.status(error.status ?? 500).json({ code: error.code });
+    });
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.mock.method(conversionQueue, "run", (task) => mode === "queue-error"
+      ? Promise.reject(new HttpError(503, "Queue is full.", { code: "SERVER_BUSY" }))
+      : task({ signal: AbortSignal.abort() }));
+    t.mock.method(fsPromises, "rm", async (target, options) => {
+      if (String(target).includes(`${path.sep}uploads${path.sep}`)) {
+        input = target;
+        removalStarted.resolve();
+        await allowRemoval.promise;
+        if (mode === "cleanup-error") throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+      return originalRm(target, options);
+    });
+    syncBuiltinESMExports();
+    let responsePromise;
+    try {
+      responsePromise = uploadFile(`http://127.0.0.1:${server.address().port}`, "/convert-file", {
+        field: "file", bytes: tinyPng, filename: "image.png", type: "image/png",
+        fields: { outputFormat: "webp" }
+      });
+      await removalStarted.promise;
+      assert.equal(errorHandled, false);
+      assert.equal(await exists(input), true);
+      allowRemoval.resolve();
+      const response = await responsePromise;
+      assert.equal(response.status, mode === "queue-error" ? 503 : 499);
+      assert.equal((await response.json()).code, mode === "queue-error" ? "SERVER_BUSY" : "REQUEST_CANCELLED");
+      assert.equal(await exists(input), mode === "cleanup-error");
+      assert.equal(isActiveFile(input), false);
+    } finally {
+      allowRemoval.resolve();
+      await responsePromise;
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      if (input) await originalRm(input, { force: true });
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}
+
+test("client disconnect cancels the queued request and cleans its upload", async (t) => {
+  const started = Promise.withResolvers();
+  const cleaned = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  const originalRm = fsPromises.rm;
+  const client = new AbortController();
+  let input;
+  const app = express();
+  app.use(mediaRoutes);
+  app.use((_error, _request, response, _next) => {
+    finished.resolve();
+    response.status(499).end();
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.mock.method(conversionQueue, "run", (_task, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new HttpError(499, "cancelled", { code: "REQUEST_CANCELLED" })), { once: true });
+    started.resolve();
+  }));
+  t.mock.method(fsPromises, "rm", async (target, options) => {
+    const result = await originalRm(target, options);
+    if (String(target).includes(`${path.sep}uploads${path.sep}`)) {
+      input = target;
+      cleaned.resolve();
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  const form = new FormData();
+  form.append("file", new Blob([tinyPng], { type: "image/png" }), "image.png");
+  form.append("outputFormat", "webp");
+  const response = fetch(`http://127.0.0.1:${server.address().port}/convert-file`, {
+    method: "POST", body: form, signal: client.signal
+  });
+  const rejected = assert.rejects(response, (error) => error.name === "AbortError");
+  try {
+    await started.promise;
+    client.abort();
+    await rejected;
+    await cleaned.promise;
+    await finished.promise;
+    assert.equal(await exists(input), false);
+    assert.equal(isActiveFile(input), false);
+  } finally {
+    client.abort();
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("FFmpeg cancellation waits for process close before cleanup", async (t) => {
+  const tracker = createOperationTracker();
+  const controller = new AbortController();
+  const spawned = Promise.withResolvers();
+  const child = new EventEmitter();
+  child.stderr = new EventEmitter();
+  const killSignals = [];
+  child.kill = (signal) => { killSignals.push(signal); return true; };
+  let output;
+  let settled = false;
+  t.mock.method(childProcess, "spawn", (_engine, args) => {
+    output = args.at(-1);
+    spawned.resolve();
+    return child;
+  });
+  syncBuiltinESMExports();
+  const conversion = convertUploadedFile({
+    file: { path: "unused.mp3", originalname: "sound.mp3", detectedKind: "mp3" },
+    outputFormat: "wav", context: { signal: controller.signal, tracker }
+  });
+  const checked = assert.rejects(conversion, (error) => error.code === "REQUEST_CANCELLED");
+  conversion.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await spawned.promise;
+    await writeFile(output, "partial");
+    controller.abort();
+    await Promise.resolve();
+    assert.deepEqual(killSignals, ["SIGTERM"]);
+    assert.equal(settled, false);
+    assert.equal(await exists(output), true);
+    child.emit("close", null);
+    await checked;
+    await tracker.close();
+    assert.equal(await exists(output), false);
+    assert.equal(isActiveFile(output), false);
+  } finally {
+    child.emit("close", null);
+    await checked;
+    await tracker.close();
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+test("tracker removes owned active outputs and shares concurrent close completion", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "editio-tracker-"));
+  try {
+    const tracker = createOperationTracker();
+    const output = tracker.trackOutput(path.join(dir, "partial.wav"));
+    await writeFile(output, "partial");
+    assert.equal(isActiveFile(output), true);
+    const closing = tracker.close();
+    assert.equal(tracker.close(), closing);
+    await closing;
+    assert.equal(await exists(output), false);
+    assert.equal(isActiveFile(output), false);
+    await tracker.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("tracker retains successful outputs and releases records after filesystem failure", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "editio-tracker-"));
+  try {
+    const successful = createOperationTracker();
+    const output = successful.trackOutput(path.join(dir, "final.pdf"));
+    await writeFile(output, "final");
+    await successful.close({ keepOutputs: true });
+    assert.equal(await exists(output), true);
+    assert.equal(isActiveFile(output), false);
+    const failing = createOperationTracker();
+    // rm without recursive cannot remove a directory on either Windows or Unix.
+    failing.trackOutput(dir);
+    await failing.close();
+    assert.equal(isActiveFile(dir), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("path traversal download attempts are rejected", async () => {
