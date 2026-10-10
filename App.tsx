@@ -16,7 +16,7 @@ import {
   View
 } from "react-native";
 import { SafeAreaInsetsContext, SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import { Feather } from "@expo/vector-icons";
+import { Feather, Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
 import Slider from "@react-native-community/slider";
 import { Image } from "expo-image";
@@ -38,6 +38,8 @@ import { ConversionLoader } from "./src/components/ConversionLoader";
 import { DocumentEditorCard } from "./src/components/DocumentEditorCard";
 import { DocumentEditorScreen, EditorTool } from "./src/components/DocumentEditorScreen";
 import { HistoryList } from "./src/components/HistoryList";
+import { FileBasketScreen } from "./src/components/FileBasketScreen";
+import { basketCopy } from "./src/game/fileBasketCopy";
 import { LanguageTransitionContent } from "./src/components/LanguageTransitionContent";
 import { PaywallModal } from "./src/components/PaywallModal";
 import { ProgressBar } from "./src/components/ProgressBar";
@@ -807,6 +809,7 @@ export default function App() {
   const [conversionModalVisible, setConversionModalVisible] = useState(false);
   const [quickActionPicker, setQuickActionPicker] = useState<HomeQuickAction | null>(null);
   const [quickActionsExpanded, setQuickActionsExpanded] = useState(false);
+  const [basketVisible, setBasketVisible] = useState(false);
   const [pdfCompressionPreset, setPdfCompressionPreset] = useState<PdfCompressionPreset>("balanced");
   const [archiveQuickIntent, setArchiveQuickIntent] = useState<ArchiveQuickIntent | null>(null);
   const [settingsDocumentKey, setSettingsDocumentKey] = useState<SettingsDocumentKey | null>(null);
@@ -915,6 +918,7 @@ export default function App() {
     [systemScheme, theme.isDark, themeTransitionTarget]
   );
   const t = translations[language];
+  const gameCopy = basketCopy(language);
   const billing = useEditioBilling(accountUser, language);
   const isLandscape = width > height;
   const appUiCopy = appUiCopies[language] ?? appUiCopies.en;
@@ -2678,6 +2682,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <SafeAreaView edges={["top", "left", "right"]} style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+        {basketVisible ? <FileBasketScreen theme={theme} language={language} onClose={() => setBasketVisible(false)} /> : null}
         <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
         <MotionModal
           transparent
@@ -3661,6 +3666,23 @@ export default function App() {
         <Animated.View style={[styles.screenPane, { opacity: screenOpacity, transform: [{ translateX: screenSlide }] }]}>
         {activeTab === "convert" ? (
           <View style={styles.section}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`${gameCopy.game}: ${gameCopy.title}`}
+              activeOpacity={0.85}
+              onPress={() => setBasketVisible(true)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 22,
+                borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.accentSoft }}
+            >
+              <View style={{ width: 48, height: 48, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.surface }}>
+                <Ionicons name="game-controller-outline" size={28} color={theme.colors.accent} />
+              </View>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={{ fontSize: 16, fontWeight: "900", color: theme.colors.text }}>{gameCopy.game} · {gameCopy.title}</Text>
+                <Text style={{ fontSize: 12, color: theme.colors.muted }}>{gameCopy.cardBody}</Text>
+              </View>
+              <Feather name="arrow-up-right" size={20} color={theme.colors.accent} />
+            </TouchableOpacity>
             <View style={[styles.quickActionPanel, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
               <View style={styles.quickActionHeader}>
                 <View style={[styles.quickActionHeaderIcon, { backgroundColor: theme.colors.primarySoft }]}>

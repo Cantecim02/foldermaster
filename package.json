@@ -12,6 +12,7 @@
     "test:archive": "node scripts/run-archive-tests.cjs",
     "test:routing": "node scripts/run-routing-tests.cjs",
     "test:monetization": "node scripts/verify-monetization-config.cjs",
+    "test:game": "node scripts/run-game-tests.cjs",
     "prebuild": "expo prebuild"
   },
   "dependencies": {
