@@ -3,6 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { isIP } from "node:net";
+import { assertStagingQaStorage } from './services/qaEnvironment.js';
 
 dotenv.config({ quiet: true });
 
@@ -124,6 +125,9 @@ function isLocalOrPrivateHost(hostname) {
 }
 
 export const config = {
+  appEnvironment: process.env.APP_ENV?.trim() || (isProduction ? 'production' : 'development'),
+  qaTestAccessEnabled: readBoolean('QA_TEST_ACCESS_ENABLED', false),
+  stagingRoot: process.env.STAGING_ROOT?.trim() || '',
   isProduction,
   port,
   bindHost: readBindHost(),
@@ -174,6 +178,9 @@ export const config = {
   ffmpegPath: process.env.FFMPEG_PATH?.trim() || bundledFfmpegPath || "ffmpeg",
   ffprobePath: process.env.FFPROBE_PATH?.trim() || bundledFfprobePath || "ffprobe"
 };
+
+if (!['production', 'staging', 'development'].includes(config.appEnvironment)) throw new Error('Invalid APP_ENV');
+if (config.qaTestAccessEnabled) assertStagingQaStorage(config);
 
 if (config.monetizationEnabled && config.isProduction) {
   const missing = [

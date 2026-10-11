@@ -10,7 +10,7 @@ for (const file of files) {
   const data = fs.readFileSync(file);
   for (const encoding of ['utf8', 'utf16le']) {
     normal ||= data.includes(Buffer.from('editio.fileBasket.preview.v1', encoding));
-    for (const marker of ['FILE_BASKET_QA_ONLY', 'editio.fileBasket.qa.v1', '5 başarılı tur simüle et']) {
+    for (const marker of ['FILE_BASKET_QA_ONLY', 'editio.fileBasket.qa.v1', '5 başarılı tur simüle et', 'QaAccessController', '/auth/qa-access', 'qa_tester', 'file_basket_preview']) {
       if (data.includes(Buffer.from(marker, encoding))) throw new Error(`QA code leaked into production bundle: ${file}`);
     }
   }

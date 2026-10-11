@@ -65,7 +65,8 @@ app.use(
     limit: 40,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (request) => request.path === "/billing/apple/notifications"
+    skip: (request) => request.path === "/billing/apple/notifications" ||
+      (config.qaTestAccessEnabled && request.path === '/auth/qa-access') // Separate bounded QA limiter.
   })
 );
 

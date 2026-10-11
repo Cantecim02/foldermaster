@@ -26,7 +26,7 @@ EXPO_PUBLIC_FILE_BASKET_QA=false EXPO_PUBLIC_MONETIZATION_ENABLED=false npx expo
 node scripts/verify-basket-bundle.cjs .tmp/basket-production-bundle
 ```
 
-`basket-qa` App Store/TestFlight genel dağıtımına gönderilmemelidir. QA profili API adresini başka profilden devralmaz; açık staging adresi gerektirir. QA doğrulamasında hesabı/dönüşümleri de test etmek için ayrıca izole staging backend ve test hesapları gerekir. Ayrı native QA bundle identifier henüz hazırlanmadı; mevcut TestFlight uygulamasıyla yan yana kurulum için staging kurulum planındaki native kimlik adımı build öncesi tamamlanmalıdır.
+`basket-qa` App Store/TestFlight genel dağıtımına gönderilmemelidir. QA profili API adresini başka profilden devralmaz; açık staging adresi gerektirir. QA doğrulamasında hesabı/dönüşümleri de test etmek için ayrıca izole staging backend ve test hesapları gerekir. Yeni talimatla aynı `com.cantecim.editio` kimliği korunur; QA erişimi staging sunucusunun `qa_tester` yetkisiyle ayrıca doğrulanır. Güncel tasarım: [QA_TEST_ACCOUNT_SCREEN.md](QA_TEST_ACCOUNT_SCREEN.md).
 
 ## Kayıt hatası: doğrulanan nedenler ve sınırlar
 

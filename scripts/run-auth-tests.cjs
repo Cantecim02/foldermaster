@@ -9,14 +9,14 @@ function harness(persisted = { token: null, revoked: null }) {
   const requests = []; let failWrite = false; let failRead = false; let failDelete = false;
   let failFenceRead = false; let failFenceWrite = false; let failFenceRemove = false;
   let reply = { user: { id: 'uuid', email: 'test@example.com', username: 'user-test' }, session: { token: 't'.repeat(43), expiresAt: '2099-01-01T00:00:00.000Z' } }; let failure = null;
-  let deferredGet = null;
+  let deferredGet = null; const secureKeys = []; const fenceKeys = [];
   const axios = { isAxiosError: error => error?.isAxiosError === true };
   for (const method of ['get', 'post', 'delete']) axios[method] = async (...args) => { requests.push([method, ...args]); const capturedFailure = failure; const capturedReply = reply; if (method === 'get' && deferredGet) await deferredGet; if (capturedFailure) throw capturedFailure; return { data: capturedReply, status: method === 'delete' ? 204 : 200 }; };
-  const secure = { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only', setItemAsync: async (key, value) => { if (failWrite) throw Error('private store internals'); persisted.token = value; }, getItemAsync: async () => { if (failRead) throw Error('private'); return persisted.token; }, deleteItemAsync: async () => { if (failDelete) throw Error('private'); persisted.token = null; } };
+  const secure = { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only', setItemAsync: async (key, value) => { secureKeys.push(key); if (failWrite) throw Error('private store internals'); persisted.token = value; }, getItemAsync: async (key) => { secureKeys.push(key); if (failRead) throw Error('private'); return persisted.token; }, deleteItemAsync: async (key) => { secureKeys.push(key); if (failDelete) throw Error('private'); persisted.token = null; } };
   const storage = {
-    getItem: async () => { if (failFenceRead) throw Error('private fence'); return persisted.revoked; },
-    setItem: async (key, value) => { if (failFenceWrite) throw Error('private fence'); persisted.revoked = value; },
-    removeItem: async () => { if (failFenceRemove) throw Error('private fence'); persisted.revoked = null; }
+    getItem: async (key) => { fenceKeys.push(key); if (failFenceRead) throw Error('private fence'); return persisted.revoked; },
+    setItem: async (key, value) => { fenceKeys.push(key); if (failFenceWrite) throw Error('private fence'); persisted.revoked = value; },
+    removeItem: async (key) => { fenceKeys.push(key); if (failFenceRemove) throw Error('private fence'); persisted.revoked = null; }
   };
   const cache = {};
   function load(name) {
@@ -36,7 +36,7 @@ function harness(persisted = { token: null, revoked: null }) {
     vm.runInThisContext(`(function(require,module,exports){${code}\n})`, { filename })(requireMock, mod, mod.exports);
     return mod.exports;
   }
-  return { load, requests, persisted, set deferredGet(value) { deferredGet = value; }, set failFenceRead(value) { failFenceRead = value; }, set failFenceWrite(value) { failFenceWrite = value; }, set failFenceRemove(value) { failFenceRemove = value; }, get token() { return persisted.token; }, set reply(value) { reply = value; }, set failure(value) { failure = value; }, set failWrite(value) { failWrite = value; }, set failRead(value) { failRead = value; }, set failDelete(value) { failDelete = value; } };
+  return { load, requests, persisted, secureKeys, fenceKeys, set deferredGet(value) { deferredGet = value; }, set failFenceRead(value) { failFenceRead = value; }, set failFenceWrite(value) { failFenceWrite = value; }, set failFenceRemove(value) { failFenceRemove = value; }, get token() { return persisted.token; }, set reply(value) { reply = value; }, set failure(value) { failure = value; }, set failWrite(value) { failWrite = value; }, set failRead(value) { failRead = value; }, set failDelete(value) { failDelete = value; } };
 }
 const axError = (status, code) => ({ isAxiosError: true, code, response: status ? { status, data: { code, message: 'secret backend detail' } } : undefined, config: { data: 'private password and token' } });
 (async () => {
@@ -127,6 +127,31 @@ const axError = (status, code) => ({ isAxiosError: true, code, response: status 
    const restoring = service.restoreAccountSession(); await new Promise(resolve => setImmediate(resolve));
    d.failure = null; await service.loginAccount(valid.email, valid.password); release(); await restoring;
    check(await service.getAccountSessionToken() === d.token, 'A stale 401 cannot erase a newer login');
+ }
+ {
+   const d = harness(); const service = d.load('authService'); const events = [];
+   const unsubscribe = service.subscribeAccountSession(() => events.push(d.requests.length));
+   await service.loginAccount(valid.email, valid.password);
+   const before = d.requests.length; const loggingOut = service.logoutAccount();
+   check(events.at(-1) === before, 'Session listeners close tools before the logout request');
+   await loggingOut; check(events.length >= 3, 'Login/logout/physical clear invalidate live tools');
+   unsubscribe(); const previous = events.length; await service.loginAccount(valid.email, valid.password);
+   check(events.length === previous, 'Unmounted authorization listener is removed');
+ }
+ {
+   const d = harness(); const service = d.load('authService'); await service.loginAccount(valid.email, valid.password); d.failRead = true;
+   await assert.rejects(service.logoutAccount(), error => error.code === 'SESSION_STORAGE_ERROR');
+   d.failRead = false; check(await service.getAccountSessionToken() === null, 'Logout read failure still blocks/clears the device session');
+   check(await harness(d.persisted).load('authService').getAccountSessionToken() === null, 'Logout read failure cannot restore on restart');
+ }
+ {
+   const beforeFlag = process.env.EXPO_PUBLIC_FILE_BASKET_QA;
+   try {
+     process.env.EXPO_PUBLIC_FILE_BASKET_QA = 'true';
+     const d = harness(); const service = d.load('authService'); await service.loginAccount(valid.email, valid.password); await service.logoutAccount();
+     check(d.secureKeys.every(key => key.startsWith('editio.accountSession.qa.')), 'Same bundle QA uses an API-scoped Keychain token key');
+     check(d.fenceKeys.every(key => key.startsWith('editio.accountSession.revoked.qa.')), 'QA revocation markers do not overwrite live session markers');
+   } finally { if (beforeFlag === undefined) delete process.env.EXPO_PUBLIC_FILE_BASKET_QA; else process.env.EXPO_PUBLIC_FILE_BASKET_QA = beforeFlag; }
  }
  console.log(`Account client: ${checks} validation, localization and session checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

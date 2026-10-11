@@ -5,12 +5,15 @@ import { config } from "../config.js";
 import { parseRegistration } from "../services/accountValidation.js";
 import {
   authenticateRequest,
+  getAccountDatabase,
   deleteAccount,
   loginAccount,
   logoutAccount,
   publicUser,
   registerAccount
 } from "../services/accountService.js";
+import { hasQaPermission, QA_ACTIONS } from '../services/qaPermissionService.js';
+import { HttpError } from '../utils/httpError.js';
 
 export const accountRoutes = express.Router();
 
@@ -40,6 +43,30 @@ const loginSchema = z.object({
 const deleteSchema = z.object({
   password: z.string().min(1).max(128)
 }).strict();
+
+const qaLimiter = rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: true, legacyHeaders: false });
+function qaAccess(request) {
+  const account = authenticateRequest(request);
+  return {
+    userId: account.user.id,
+    qaTester: hasQaPermission(getAccountDatabase(), config, account.user.id),
+    environment: config.appEnvironment,
+    scope: 'file_basket_preview',
+    leaseMs: 1500
+  };
+}
+accountRoutes.get('/qa-access', qaLimiter, (request, response, next) => {
+  try { response.set('Cache-Control', 'no-store').json(qaAccess(request)); } catch (error) { next(error); }
+});
+accountRoutes.post('/qa-access', qaLimiter, (request, response, next) => {
+  try {
+    z.object({ action: z.enum(QA_ACTIONS) }).strict().parse(request.body);
+    const access = qaAccess(request);
+    if (!access.qaTester) throw new HttpError(403, 'QA access denied', { code: 'QA_ACCESS_DENIED' });
+    // Only a fresh permission check. No progress, quota, history or billing mutation.
+    response.set('Cache-Control', 'no-store').json(access);
+  } catch (error) { next(error); }
+});
 
 accountRoutes.post("/register", authLimiter, async (request, response, next) => {
   try {

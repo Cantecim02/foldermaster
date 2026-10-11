@@ -1,8 +1,10 @@
 # Editio: uygulanmamış staging kurulum planı
 
-Kaynak branch: `codex/basket-account-preview`. İncelenen taban commit:
-`266787b7a74a4b2e1735484ac7243ba99a3dde08`.
-Kurulumda son teslim raporundaki **yeni tam commit SHA** kullanılmalıdır.
+Güncel inceleme branch'i: `codex/qa-tester-account-screen`; temel commit:
+`17d44384a5f4f5b2d634393680ec33f4fdc6862f`.
+Commit/push yalnız geliştirme kaynaklarını kaydeder. Kurulum için önce kaynak incelemesi ve
+ayrı staging kurulum onayı gerekir; **yayınlanmış, onaylı branch ve yeni tam commit SHA** kullanılmalıdır.
+Güncel yetki ve aynı uygulama test dağıtımı için [QA_TEST_ACCOUNT_SCREEN.md](QA_TEST_ACCOUNT_SCREEN.md) önceliklidir.
 Bu belge komut tarifidir; sunucu, EAS ortamı, Apple hesabı ve deployment işlemleri çalıştırılmadı.
 Migration ayrıntıları ve rollback sınırları: [STAGING_ACCOUNT_ROLLOUT.md](STAGING_ACCOUNT_ROLLOUT.md).
 
@@ -22,7 +24,7 @@ Bu plan mevcut sunucuda VM oluşturmaz, servis kurmaz veya üretim ACL/firewall 
 | Backup | Canlı backup kopyalanmaz | `C:\EditioStaging\backups`, yalnız sentetik staging verisi |
 | HTTPS | Mevcut yönlendirmeler, korunur | Stage VM'ye özel HTTPS hostname, örneğin ayrı `8443` listener |
 | Servis hesabı | Mevcut hesap, korunur | Yeni staging hesabı; üretim paylaşımı/credential erişimi yok |
-| iOS | `com.cantecim.editio`, korunur | Planlanan `com.cantecim.editio.basketqa` / `Editio QA` |
+| iOS | `com.cantecim.editio`, korunur | Planlanan `com.cantecim.editio`, aynı uygulamanın test dağıtımı |
 
 VM'ye üretim diskleri, SMB paylaşımları, SQLite/backup dosyaları, `.env`, Apple anahtarları,
 SMTP şifreleri veya üretim servis hesabı aktarılmamalıdır. VM runtime ağ politikası üretim
@@ -52,9 +54,11 @@ Production makinesinden env/credential devralınmamalıdır. Komutlar mevcut bir
 $ErrorActionPreference = 'Stop'
 $StageRoot = 'C:\EditioStaging'
 $ReviewedCommit = 'PASTE_NEW_FULL_COMMIT_SHA_FROM_DELIVERY'
+$ReviewedBranch = 'REPLACE_APPROVED_PUBLISHED_BRANCH'
 $StageApi = 'https://stage-api.example.invalid:8443'
 $StageUri = [uri]$StageApi
 if ($ReviewedCommit -notmatch '^[a-f0-9]{40}$') { throw 'Teslim commit SHA gerekli' }
+if ($ReviewedBranch -notlike 'codex/*') { throw 'Onaylı, yayınlanmış geliştirme branch gerekli' }
 if ($StageUri.Scheme -ne 'https' -or $StageUri.Host.EndsWith('.invalid') -or
     $StageUri.UserInfo -or $StageUri.Query -or $StageUri.Fragment -or
     $StageUri.AbsolutePath -ne '/' -or
@@ -73,7 +77,7 @@ foreach ($Directory in @('data', 'downloads', 'backups', 'tls', 'logs')) {
 $StagePrincipal = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 icacls $StageRoot /inheritance:r /grant:r "${StagePrincipal}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F'
 if ($LASTEXITCODE -ne 0) { throw 'Staging ACL kurulamadı' }
-git clone --single-branch --branch codex/basket-account-preview https://github.com/Cantecim02/foldermaster.git "$StageRoot\source"
+git clone --single-branch --branch $ReviewedBranch https://github.com/Cantecim02/foldermaster.git "$StageRoot\source"
 if ($LASTEXITCODE -ne 0) { throw 'Git clone başarısız' }
 Set-Location "$StageRoot\source"
 git checkout --detach $ReviewedCommit
@@ -105,6 +109,9 @@ if (Test-Path -LiteralPath "$StageRoot\data\staging.sqlite") { throw 'DB zaten v
 if (Test-Path -LiteralPath '.env') { throw 'Env zaten var; üzerine yazılmaz' }
 $StageSettings = [ordered]@{
     NODE_ENV = 'production'
+    APP_ENV = 'staging'
+    QA_TEST_ACCESS_ENABLED = 'true'
+    STAGING_ROOT = $StageRoot
     PORT = '4100'
     BIND_HOST = '127.0.0.1'
     PUBLIC_BASE_URL = $StageApi.TrimEnd('/')
@@ -225,36 +232,19 @@ QA/monetization flag'leri zaten ilgili `eas.json` profilinde true/false olarak t
 Cloud auth hatasında durun; şifre/token çıktısı paylaşmayın.
 [EAS environment yönetimi](https://docs.expo.dev/eas/environment-variables/manage/).
 
-## QA iOS kimliği: build öncesi tamamlanacak iş
+## QA iOS dağıtımı: aynı uygulama kimliği
 
-**Mevcut `basket-qa` henüz ayrı native bundle identifier kullanmıyor.** Şu an build başlatmak
-mevcut uygulama kimliğini kullanabilir; bu plan ayrı kimlik uygulamasının yerine geçmez.
-Önerilen ayrı kimlik `com.cantecim.editio.basketqa`, display name `Editio QA`, scheme
-`editio-basket-qa`, ayrı Keychain access group ve ayrı provisioning profile'dır.
+Yeni kullanıcı talimatı önceki ayrı QA uygulaması önerisinin yerini aldı. Bundle identifier,
+Keychain grubu ve uygulama kimliği `com.cantecim.editio` olarak kalır. Ayrı App ID/QA uygulaması
+oluşturulmaz. Aynı kimliğin test sürümü mevcut kurulumun yerini alabilir; cihazdaki normal
+ilerlemeyi korumak için QA yalnız ayrı test storage anahtarını kullanır.
 
-Bu repoda `ios/` Git'te tutulduğu için yalnız `app.config.js` değişikliği yeterli değildir.
-Bir sonraki, ayrıca yetkilendirilecek geliştirme adımında:
-
-1. QA'ya özel shared Xcode scheme/configuration/target hazırlayın; mevcut production target'ını koruyun.
-   QA build settings, Info.plist URL scheme/display name ve entitlements/Keychain grubunu yukarıdaki
-   kimlikle eşleyin. Native ZIP/ArchiveExtractor ve diğer mevcut native entegrasyonları koruyun.
-2. `app.config.js` QA varyantını aynı kimlikle eşleyin; `basket-qa.ios.scheme` doğru QA scheme'ini
-   seçsin. App group, Associated Domains, push veya diğer capability'ler varsa üretime erişim
-   veren paylaşım bulunmadığını inceleyin. `prebuild --clean` mevcut özel native kodu koruduğu
-   doğrulanmadan çalıştırılmamalıdır.
-3. Apple Developer'da yeni App ID'yi ve internal/ad hoc dağıtım için test iPhone UDID'lerini hazırlayın.
-   Mevcut App Store Connect/TestFlight uygulamasına submission yapılmaz. QA için TestFlight tercih
-   edilirse yeni App Store Connect uygulaması ve ayrı submission süreci ayrıca onaylanmalıdır.
-4. Build öncesi gerçek native Release build settings'te QA bundle ID/entitlements/scheme'i doğrulayın;
-   kaynak testlerine production kimliğinin korunması ve QA kimliği için regresyon ekleyin.
-   Expo public config kontrolü tek başına yeterli değildir. Ayrı QA build numarası takibini doğrulayın.
-5. TypeScript/auth/game/QA/routing/monetization/native ZIP testleri ve production bundle'da QA kodunun
-   dışlanması kontrolü yeniden geçsin. Mevcut TestFlight uygulamasıyla yan yana kurulabilme,
-   Keychain/AsyncStorage ayrılığı ve staging-only trafik cihazda doğrulansın.
-
-Ayrı bundle identifier yan yana kurulum için gereklidir; mevcut native projelerde scheme/configuration
-da eşlenmelidir. [Expo uygulama varyantları](https://docs.expo.dev/build-reference/variants/).
-Bu teslimde native kimlik/provisioning değiştirilmedi; EAS build/submission komutu çalıştırılmadı.
+`basket-qa` internal/ad hoc profili aynı uygulamayla, zorunlu staging API ve canlı doğrulanan
+`qa_tester` yetkisiyle çalışır. Genel production paketinde QA bağımlılıkları dışlanır.
+TestFlight QA için Apple'ın Internal Only export seçeneği ve ayrı yayın güvenlik kontrolü
+henüz uygulanmış bir EAS akışı değildir; normal production profilinde QA açılmamalıdır.
+Ayrıntılar ve operatör komutları: [QA_TEST_ACCOUNT_SCREEN.md](QA_TEST_ACCOUNT_SCREEN.md).
+Bu görev yeni build/submission veya Apple hesabı işlemi yapmaz.
 
 ## Kabul, uyumluluk ve durdurma noktaları
 
@@ -270,7 +260,7 @@ Bu teslimde native kimlik/provisioning değiştirilmedi; EAS build/submission ko
 - Sosyal giriş yalnız plandır; satın alma, gerçek ödül, App Store incelemesi/yayın etkinleştirilmez.
 - Rollback, bu yeni staging servislerini durdurmak ve ayrı kaynak revision'ını geri seçmekle sınırlıdır.
   Profil şemasına yeni yazılar geldikten sonra eski şemaya sessiz downgrade yapılmaz; ayrıntılar rollout belgesindedir.
-- Host/TLS/VM erişimi, QA native kimliği, Apple provisioning ve cihaz testleri tamamlanmadan
+- Host/TLS/VM erişimi, aynı kimlik için test dağıtımı, Apple provisioning ve cihaz testleri tamamlanmadan
   staging hazır veya QA build hazır olarak raporlanmamalıdır.
 
 Commit/push yalnız geliştirme branch'ini kaydeder. `main` merge, server işlemi, migration,

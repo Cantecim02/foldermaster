@@ -14,15 +14,18 @@ import { attemptsLeft, awardHit, beginAttempt, emptyProgress, parseProgress, rou
 import { FileBasketHoop } from "./FileBasketHoop";
 import { FileBasketTutorial, tutorialCopy } from "./FileBasketTutorial";
 import type { BasketProgress } from "../game/fileBasketRules";
+import type { AccountUser } from '../services/authService';
+import type { QaGuard } from '../services/qaAccessController';
+import { ProgressLane } from '../game/progressLane';
 
 const QaPanel = require("./FileBasketQaPanel").default as typeof import("./FileBasketQaPanel").default;
 const qaStorageKey = require("./FileBasketQaPanel").qaStorageKey as string;
-const qaAvailable = __DEV__ || process.env.EXPO_PUBLIC_FILE_BASKET_QA === "true";
+const qaAvailable = process.env.EXPO_PUBLIC_FILE_BASKET_QA === "true";
 const tutorialKey = "editio.fileBasket.tutorial.v2";
 const storageKey = "editio.fileBasket.preview.v1";
 type Phase = "loading" | "ready" | "saving" | "flying" | "miss" | "success" | "paused" | "error" | "loadError";
 
-export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme; language: Language; onClose: () => void }) {
+export function FileBasketScreen({ theme, language, onClose, user }: { theme: AppTheme; language: Language; onClose: () => void; user: AccountUser | null }) {
   const copy = basketCopy(language);
   const window = useWindowDimensions();
   const isLandscape = window.width > window.height;
@@ -30,7 +33,9 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   const [tutorialLoaded, setTutorialLoaded] = useState(false);
   const tutorialRef = useRef(true);
   const [qaActive, setQaActive] = useState(false);
-  const progressKey = useRef(storageKey);
+  const qaActiveRef = useRef(false);
+  const qaGuard = useRef<QaGuard | null>(null);
+  const progressLane = useRef(new ProgressLane(storageKey));
   const [impact, setImpact] = useState(0);
   const missFade = useRef(new Animated.Value(1)).current;
   const [missOpacity, setMissOpacity] = useState(1);
@@ -67,23 +72,41 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   }
 
   async function loadProgress() {
+    const lane = progressLane.current.capture();
     changePhase("loading");
     try {
-      const saved = parseProgress(await AsyncStorage.getItem(progressKey.current));
-      if (!mounted.current) return;
+      const saved = parseProgress(await AsyncStorage.getItem(lane.key));
+      if (!mounted.current || !lane.current()) return;
       progressRef.current = saved;
       setProgress(saved);
       setNow(Date.now());
       changePhase("ready");
     } catch {
-      if (mounted.current) changePhase("loadError");
+      if (mounted.current && lane.current()) changePhase("loadError");
     }
   }
 
   async function saveProgress(next: BasketProgress) {
-    await AsyncStorage.setItem(progressKey.current, JSON.stringify(next));
+    const lane = progressLane.current.capture();
+    await AsyncStorage.setItem(lane.key, JSON.stringify(next));
+    if (!lane.current()) return false;
     progressRef.current = next;
     if (mounted.current) setProgress(next);
+    return true;
+  }
+
+  function switchProgress(test: boolean) {
+    if (!mounted.current) return;
+    progressLane.current.select(test ? qaStorageKey : storageKey);
+    cancelFlight();
+    qaActiveRef.current = test; setQaActive(test);
+    progressRef.current = emptyProgress(); setProgress(progressRef.current);
+    setShot(null); setVelocity(null); celebration.stopAnimation(); celebration.setValue(0);
+    void loadProgress();
+  }
+  function updateAccess(guard: QaGuard | null) {
+    qaGuard.current = guard;
+    if (!guard && qaActiveRef.current) switchProgress(false);
   }
 
   function cancelFlight() {
@@ -115,6 +138,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   }, []);
 
   async function finishFlight(final: Shot, roundStartedAt: number) {
+    const lane = progressLane.current.capture();
     frame.current = null;
     if (!final.scored) {
       changePhase("miss");
@@ -122,18 +146,26 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
     }
     changePhase("saving");
     try {
-      await saveProgress(awardHit(progressRef.current, roundStartedAt));
+      if (qaActiveRef.current && !await qaGuard.current?.('score')) return;
+      if (!lane.current()) return;
+      if (!await saveProgress(awardHit(progressRef.current, roundStartedAt))) return;
       if (!mounted.current) return;
       changePhase("success");
       celebration.setValue(0);
       Animated.timing(celebration, { toValue: 1, duration: 1100, useNativeDriver: true }).start();
     } catch {
-      if (mounted.current) changePhase("error");
+      if (mounted.current && lane.current()) changePhase("error");
     }
   }
 
   async function launch(aim: Point) {
     if (tutorialRef.current || !tutorialLoaded || phaseRef.current !== "ready" || aim.y > -150) return;
+    const lane = progressLane.current.capture();
+    if (qaActiveRef.current) {
+      changePhase('saving');
+      if (!await qaGuard.current?.('shot') || !lane.current()) return;
+      changePhase('ready');
+    }
     const next = beginAttempt(progressRef.current, Date.now());
     if (!next?.round) return;
     const roundStartedAt = next.round.startedAt;
@@ -142,7 +174,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
     setVelocity(null);
     aimRef.current = null;
     try {
-      await saveProgress(next);
+      if (!await saveProgress(next)) return;
       if (!mounted.current) return;
       setNow(Date.now());
       if (appState.current !== "active") { changePhase("paused"); return; }
@@ -163,7 +195,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
       };
       frame.current = requestAnimationFrame(animate);
     } catch {
-      if (mounted.current) changePhase("error");
+      if (mounted.current && lane.current()) changePhase("error");
     }
   }
 
@@ -265,9 +297,9 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
             </View>
           </View>
 
-          {qaAvailable ? <QaPanel active={qaActive} busy={phase === "flying" || phase === "saving" || phase === "loading" || tutorial} progress={progress}
-            onToggle={() => { if (["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; progressKey.current = qaActive ? storageKey : qaStorageKey; setQaActive(!qaActive); setShot(null); setVelocity(null); void loadProgress(); }}
-            onChange={next => { if (["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; changePhase("saving"); void saveProgress(next).then(() => { if (mounted.current) resetShot(); }).catch(() => { if (mounted.current) changePhase("error"); }); }} /> : null}
+          {qaAvailable ? <QaPanel user={user} language={language} onAccessChange={updateAccess} active={qaActive} busy={phase === "flying" || phase === "saving" || phase === "loading" || tutorial} progress={progress}
+            onToggle={() => { if ((!qaActiveRef.current && !qaGuard.current) || ["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; switchProgress(!qaActiveRef.current); }}
+            onChange={next => { if (!qaActiveRef.current || !qaGuard.current || ["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; const lane = progressLane.current.capture(); changePhase("saving"); void saveProgress(next).then(saved => { if (saved && mounted.current) resetShot(); }).catch(() => { if (mounted.current && lane.current()) changePhase("error"); }); }} /> : null}
           {!isLandscape ? statsPanel : null}
           <View style={[styles.playArea, isLandscape && styles.playAreaLandscape]}>
 

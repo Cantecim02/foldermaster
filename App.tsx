@@ -29,8 +29,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
 import { AppSplashScreen } from "./src/components/AppSplashScreen";
-import { AccountModal } from "./src/components/AccountModal";
-import type { AccountLifecycleEvent, AccountSessionEndReason } from "./src/components/AccountModal";
+import { AccountScreen } from "./src/components/AccountScreen";
+import type { AccountLifecycleEvent, AccountSessionEndReason } from "./src/components/AccountScreen";
 import { AccountLifecycleNotice } from "./src/components/AccountLifecycleNotice";
 import { ArchiveManager } from "./src/components/ArchiveManager";
 import type { ArchiveQuickIntent } from "./src/components/ArchiveManager";
@@ -819,7 +819,7 @@ export default function App() {
   const [archiveQuickIntent, setArchiveQuickIntent] = useState<ArchiveQuickIntent | null>(null);
   const [settingsDocumentKey, setSettingsDocumentKey] = useState<SettingsDocumentKey | null>(null);
   const [settingsDocumentVisible, setSettingsDocumentVisible] = useState(false);
-  const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [accountScreenVisible, setAccountScreenVisible] = useState(false);
   const [paywallVisible, setPaywallVisible] = useState(false);
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
   const [accountLifecycleEvent, setAccountLifecycleEvent] = useState<AccountLifecycleEvent | null>(null);
@@ -978,13 +978,13 @@ export default function App() {
     setThemeTransitionTarget(null);
   }, []);
 
-  const closeAccountModal = () => {
-    setAccountModalVisible(false);
+  const closeAccountScreen = () => {
+    setAccountScreenVisible(false);
   };
 
   const showAccountLifecycleNotice = useCallback((event: AccountLifecycleEvent) => {
     if (accountLifecycleTimer.current) clearTimeout(accountLifecycleTimer.current);
-    setAccountModalVisible(false);
+    setAccountScreenVisible(false);
     setAccountLifecycleEvent(null);
     accountLifecycleTimer.current = setTimeout(() => {
       setAccountLifecycleEvent(event);
@@ -1016,7 +1016,6 @@ export default function App() {
 
   const openAccountLegalDocument = (key: "privacy" | "terms") => {
     returnToAccountAfterLegal.current = true;
-    setAccountModalVisible(false);
     openSettingsDocument(key);
   };
 
@@ -1033,7 +1032,7 @@ export default function App() {
       setSettingsDocumentKey(null);
       if (returnToAccountAfterLegal.current) {
         returnToAccountAfterLegal.current = false;
-        setAccountModalVisible(true);
+        setAccountScreenVisible(true);
       }
       settingsDocumentCloseTimer.current = null;
     }, 320);
@@ -2687,7 +2686,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <SafeAreaView edges={["top", "left", "right"]} style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
-        {basketVisible ? <FileBasketScreen theme={theme} language={language} onClose={() => setBasketVisible(false)} /> : null}
+        {basketVisible ? <FileBasketScreen user={accountUser} theme={theme} language={language} onClose={() => setBasketVisible(false)} /> : null}
         <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} />
         <MotionModal
           transparent
@@ -2707,8 +2706,8 @@ export default function App() {
             </View>
           </View>
         </MotionModal>
-        <AccountModal
-          visible={accountModalVisible}
+        <AccountScreen
+          visible={accountScreenVisible}
           isLandscape={isLandscape}
           language={language}
           theme={theme}
@@ -2716,8 +2715,10 @@ export default function App() {
           onUserChange={setAccountUser}
           onLifecycleSuccess={showAccountLifecycleNotice}
           onSessionEnd={handleAccountSessionEnd}
-          onClose={closeAccountModal}
+          onClose={closeAccountScreen}
           onOpenLegal={openAccountLegalDocument}
+          legalOpen={settingsDocumentVisible}
+          onOpenHistory={() => setActiveTab("history")}
           monetizationEnabled={billing.enabled}
           onManageSubscription={() => void billing.manageSubscription()}
         />
@@ -3636,7 +3637,7 @@ export default function App() {
                 styles.profileButton,
                 { backgroundColor: accountUser ? theme.colors.primarySoft : theme.colors.surface, borderColor: theme.colors.border }
               ]}
-              onPress={() => setAccountModalVisible(true)}
+              onPress={() => setAccountScreenVisible(true)}
             >
               {accountUser ? (
                 <Text style={[styles.profileInitial, { color: theme.colors.primary }]}>
@@ -3802,7 +3803,7 @@ export default function App() {
             labels={t}
             language={language}
             user={accountUser}
-            onOpenAccount={() => setAccountModalVisible(true)}
+            onOpenAccount={() => setAccountScreenVisible(true)}
             onRetry={runConversion}
             onShare={shareOutputs}
             onClear={clearHistory}
@@ -3935,7 +3936,7 @@ export default function App() {
 
             <TouchableOpacity
               style={[styles.settingsRow, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}
-              onPress={() => setAccountModalVisible(true)}
+              onPress={() => setAccountScreenVisible(true)}
             >
               <View style={[styles.settingsIcon, { backgroundColor: theme.colors.accentSoft }]}>
                 <Feather name="user" size={18} color={theme.colors.accent} />

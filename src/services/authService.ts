@@ -7,11 +7,21 @@ import { AuthApiError, normalizeAuthError } from "./authErrors";
 import { registrationError, type RegistrationInput } from "./accountValidation";
 export { AuthApiError } from "./authErrors";
 
-const sessionTokenKey = "editio.accountSession.v1";
-const sessionRevokedKey = "editio.accountSession.revoked.v1";
+// Same bundle ID shares Keychain: staging builds must never read/send a live token.
+const sessionScope = process.env.EXPO_PUBLIC_FILE_BASKET_QA === 'true'
+  ? '.qa.' + Array.from(String(getApiBaseUrl())).map(char => char.charCodeAt(0).toString(16)).join('-')
+  : '';
+const sessionTokenKey = `editio.accountSession${sessionScope}.v1`;
+const sessionRevokedKey = `editio.accountSession.revoked${sessionScope}.v1`;
 let webSessionToken: string | null = null;
 let sessionSuppressed = false;
 let sessionGeneration = 0;
+const sessionListeners = new Set<() => void>();
+export function subscribeAccountSession(listener: () => void) {
+  sessionListeners.add(listener);
+  return () => { sessionListeners.delete(listener); };
+}
+function notifySessionChange() { for (const listener of sessionListeners) { try { listener(); } catch { /* UI listeners cannot prevent token cleanup. */ } } }
 
 export type AccountDeletionResult = { serverDeleted: true; deviceCleanupPending: boolean };
 
@@ -19,6 +29,7 @@ export type AccountUser = {
   id: string;
   appAccountToken: string;
   username?: string;
+  permissions?: { qaTester: boolean }; // Informational only; tools require a fresh server check.
   firstName?: string | null;
   lastName?: string | null;
   email: string;
@@ -102,8 +113,9 @@ export async function restoreAccountSession() {
 }
 
 export async function logoutAccount() {
-  const token = await readSessionToken();
+  notifySessionChange(); // Close live tools before the network round trip or secure cleanup.
   try {
+    const token = await readSessionToken();
     if (token) {
       await axios.post(`${getApiBaseUrl()}/auth/logout`, undefined, {
         headers: { Authorization: `Bearer ${token}` },
@@ -189,6 +201,7 @@ export async function recordConversionHistory(input: {
 
 async function saveSessionToken(token: string) {
   sessionGeneration += 1;
+  notifySessionChange();
   if (Platform.OS === "web") {
     webSessionToken = token;
     sessionSuppressed = false;
@@ -223,6 +236,7 @@ export async function getAccountSessionToken() {
 async function clearSessionToken() {
   sessionGeneration += 1;
   sessionSuppressed = true;
+  notifySessionChange();
   if (Platform.OS === "web") {
     webSessionToken = null;
     return;

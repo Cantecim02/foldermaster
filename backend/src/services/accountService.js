@@ -8,6 +8,7 @@ import { HttpError } from "../utils/httpError.js";
 import { insertProfile, inspectAccountSchema, assertDatabaseHealthy } from "./accountProfileMigration.js";
 
 import { prepareAccountTables } from "./accountStoreSchema.js";
+import { prepareQaPermissions, hasQaPermission } from './qaPermissionService.js';
 
 const passwordHashOptions = {
   type: argon2.argon2id,
@@ -35,6 +36,7 @@ export async function initializeAccountStore() {
     database.transaction(() => {
       if (inspectAccountSchema(database) === "legacy") throw new Error("Offline migration required");
       prepareAccountTables(database);
+      if (config.qaTestAccessEnabled) prepareQaPermissions(database);
       assertDatabaseHealthy(database);
     }).immediate();
   } catch (error) {
@@ -267,6 +269,7 @@ export function publicUser(user) {
   return {
     id: user.id,
     username: user.username,
+    permissions: { qaTester: hasQaPermission(requireDatabase(), config, user.id) },
     firstName: user.firstName ?? "",
     lastName: user.lastName ?? "",
     email: user.email,

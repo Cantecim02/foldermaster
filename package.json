@@ -17,7 +17,9 @@
     "test:basket-config": "node scripts/test-basket-config.cjs",
     "test:auth": "node scripts/run-auth-tests.cjs",
     "eas-build-pre-install": "node scripts/verify-basket-config.cjs",
-    "test:legal": "node scripts/test-account-legal.cjs"
+    "test:legal": "node scripts/test-account-legal.cjs",
+    "test:qa-access": "node scripts/test-qa-access.cjs",
+    "test:account-screen": "node scripts/test-account-screen.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
