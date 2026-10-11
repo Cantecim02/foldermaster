@@ -1,3 +1,4 @@
+import { accountDisplayName } from "./src/services/accountValidation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -155,7 +156,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
   const trDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Gizlilik Politikası",
-      subtitle: "Son Güncelleme: 16 Temmuz 2026",
+      subtitle: "Son Güncelleme: 11 Ekim 2026",
       summary: "Dosya işleme, geçici sunucu kullanımı ve güvenlik açıklamaları.",
       icon: "shield",
       sections: [
@@ -163,7 +164,9 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Toplanan Bilgiler",
           body: [
             "Editio, seçtiğiniz dosyaları yalnızca dönüştürme, düzenleme, sıkıştırma veya paylaşım işlemini tamamlamak için işler.",
-            "Hesap oluşturursanız ad, soyad, doğum tarihi, e-posta adresi, rastgele kullanıcı/oturum kimlikleri ve yasal metinleri kabul ettiğiniz tarih ile sürüm bilgileri işlenir.",
+            "Hesap oluşturursanız e-posta adresiniz, benzersiz rastgele kullanıcı adınız, kullanıcı/oturum kimlikleri ve yasal metinleri kabul ettiğiniz tarih ile sürümleri kaydedilir. Ad ve soyad isteğe bağlıdır; yalnızca verirseniz işlenir.",
+            "Yeni kayıt ekranında tam doğum tarihi istenmez. Gösterilen minimum yaşı karşıladığınıza ilişkin beyanınızın zamanı, minimum yaş eşiği ve beyan yöntemi kaydedilir. Bu beyan tam yaşınızı veya kimliğinizi doğrulamaz. Eski istemcinin gönderdiği doğum tarihi yalnızca yaş sınırını kontrol etmek için kullanılır ve yeni hesapta saklanmaz.",
+            "Önceki kayıt modelinde alınmış doğum tarihleri geçiş sırasında korunur ve otomatik silinmez. Bu veriler hesabın silinmesine veya ayrıca incelenip onaylanacak bir veri azaltma işlemine kadar saklanır; yeni kayıtlar için doğum tarihi kaydı oluşturulmaz. Yedek kopyalar güvenli saklama ve imha düzenine tabidir.",
             "Uygulama reklam göstermez ve kullanıcıları izlemeye yönelik üçüncü taraf reklam/analitik SDK'sı kullanmaz."
           ]
         },
@@ -171,7 +174,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Hesap ve Saklama",
           body: [
             "Hesap bilgileri kimlik doğrulama, oturum güvenliği ve hesabınızı yönetebilmeniz için kullanılır. Şifrenin kendisi saklanmaz; yalnızca tek yönlü Argon2id şifre özeti tutulur.",
-            "Hesap bilgileri hesabınızı silene kadar saklanır. Ayarlar > Editio hesabı bölümünden hesabınızı ve aktif oturumlarınızı kalıcı olarak silebilirsiniz.",
+            "Ayarlar > Editio hesabı bölümünden hesabınızı silebilirsiniz; sunucudaki hesap, oturumlar ve hesaba bağlı dönüşüm geçmişi silinir. Hizmet doğrulaması, geri yükleme, refund/revoke için gereken sınırlı ödeme kayıtları kullanıcı hesabından ayrıştırılarak tutulabilir. Hesap silme Apple aboneliğini iptal etmez. Yedekler ve sınırlı güvenlik kayıtları ayrıca saklama ve imha düzenine tabidir.",
             "Giriş yapmış kullanıcıların dönüşüm geçmişinde dosya adı, giriş ve çıkış formatı, dosya boyutu, işlem durumu ve işlem tarihi saklanabilir. Dönüştürülen dosyanın kendisi hesap geçmişinde saklanmaz.",
             "Hesap oluşturmak isteğe bağlıdır ve dosya dönüştürme özelliklerini kullanmak için zorunlu değildir."
           ]
@@ -210,7 +213,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           body: [
             "Editio; dosya dönüştürme, PDF düzenleme, imza ekleme, sesli okuma, arşiv oluşturma ve arşiv çıkarma amacıyla sunulur.",
             "Kullanıcı, uygulamayı yürürlükteki yasalara ve üçüncü taraf haklarına uygun şekilde kullanmalıdır.",
-            "Hesap oluştururken doğru bilgiler vermeli, şifrenizi gizli tutmalı ve en az 13 yaşında olmalısınız."
+            "Hesap oluşturmak isteğe bağlıdır. Ad ve soyad zorunlu değildir; e-posta ve benzersiz kullanıcı adı kaydedilir. Doğru bilgiler vermeli ve şifrenizi gizli tutmalısınız. En az 13 yaşında olmalı ve kayıt sırasında gösterilen minimum yaş şartını (daha yüksek olabilir) karşıladığınızı beyan etmelisiniz. Yeni kayıt ekranında tam doğum tarihi sorulmaz; yaş beyanı kimlik doğrulaması değildir. Hesabınızı Ayarlar bölümünden silebilirsiniz; bu işlem Apple aboneliğini iptal etmez."
           ]
         },
         {
@@ -317,7 +320,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
   const enDocuments: Record<SettingsDocumentKey, SettingsDocument> = {
     privacy: {
       title: "Editio Privacy Policy",
-      subtitle: "Last updated: July 16, 2026",
+      subtitle: "Last updated: October 11, 2026",
       summary: "File processing, temporary server use, and security.",
       icon: "shield",
       sections: [
@@ -325,7 +328,9 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Information We Process",
           body: [
             "Editio processes selected files only to complete conversion, editing, compression, extraction, or sharing workflows.",
-            "If you create an account, Editio processes your first and last name, date of birth, email address, random user/session identifiers, and the date and version of your legal acceptance.",
+            "If you create an account, your email address, unique random username, user/session identifiers, and the date and versions of your legal acceptance are recorded. First and last names are optional and processed only if provided.",
+            "The new registration screen does not request a full date of birth. We record the time, minimum age threshold and method of your declaration that you meet the displayed minimum age. This declaration does not verify your exact age or identity. A birth date sent by an older client is used only to check the age threshold and is not stored for a new account.",
+            "Birth dates collected under the previous registration model are preserved during migration and are not automatically erased. They are retained until account deletion or a separately reviewed and approved data minimization process; new accounts do not receive a stored birth date. Backup copies remain subject to secure retention and disposal procedures.",
             "Editio does not show ads and does not use third-party advertising or user-tracking analytics SDKs."
           ]
         },
@@ -333,7 +338,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           title: "Accounts and Retention",
           body: [
             "Account data is used for authentication, session security, and account management. Editio never stores your plaintext password; it stores only a one-way Argon2id password hash.",
-            "Account data is kept until you delete the account. You can permanently delete your account and active sessions in Settings > Editio account.",
+            "You can delete your account in Settings > Editio account; the server account, sessions and linked conversion history are deleted. Limited payment records needed for entitlement verification, restoration, refunds or revocations may be retained separately from the user account. Account deletion does not cancel an Apple subscription. Backups and limited security records follow separate retention and disposal procedures.",
             "For signed-in users, conversion history may store the file name, source and output formats, file size, operation status, and operation date. The converted file itself is not stored in account history.",
             "Creating an account is optional and is not required for file conversion features."
           ]
@@ -365,7 +370,7 @@ function getSettingsDocuments(language: Language): Record<SettingsDocumentKey, S
           body: [
             "Editio is provided for file conversion, PDF editing, visible signatures, read-aloud, ZIP creation, and archive extraction.",
             "You must use the app in accordance with applicable laws and third-party rights.",
-            "When creating an account, provide accurate information, keep your password confidential, and be at least 13 years old."
+            "Accounts are optional. First and last names are not required; an email address and unique username are recorded. Provide accurate information and keep your password confidential. You must be at least 13 and declare that you meet the minimum age displayed during registration, which may be higher. The new registration screen does not ask for a full birth date; an age declaration is not identity verification. You can delete your account from Settings; this does not cancel an Apple subscription."
           ]
         },
         {
@@ -3635,7 +3640,7 @@ export default function App() {
             >
               {accountUser ? (
                 <Text style={[styles.profileInitial, { color: theme.colors.primary }]}>
-                  {accountUser.firstName.slice(0, 1).toLocaleUpperCase(language)}
+                  {accountDisplayName(accountUser).slice(0, 1).toLocaleUpperCase(language)}
                 </Text>
               ) : (
                 <Feather name="user" size={19} color={theme.colors.text} />
@@ -3938,7 +3943,7 @@ export default function App() {
               <View style={styles.trashRowText}>
                 <Text style={[styles.trashName, { color: theme.colors.text }]}>{appUiCopy.accountTitle}</Text>
                 <Text style={[styles.settingsDocumentSummary, { color: theme.colors.muted }]}>
-                  {accountUser ? `${accountUser.firstName} ${accountUser.lastName} · ${accountUser.email}` : appUiCopy.accountBody}
+                  {accountUser ? `${accountDisplayName(accountUser)} · ${accountUser.email}` : appUiCopy.accountBody}
                 </Text>
               </View>
               <Feather name="chevron-right" size={18} color={theme.colors.muted} />

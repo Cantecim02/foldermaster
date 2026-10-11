@@ -5,6 +5,9 @@ import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { config } from "../config.js";
 import { HttpError } from "../utils/httpError.js";
+import { insertProfile, inspectAccountSchema, assertDatabaseHealthy } from "./accountProfileMigration.js";
+
+import { prepareAccountTables } from "./accountStoreSchema.js";
 
 const passwordHashOptions = {
   type: argon2.argon2id,
@@ -21,74 +24,32 @@ export async function initializeAccountStore() {
 
   await mkdir(path.dirname(config.databasePath), { recursive: true });
   database = new Database(config.databasePath);
-  database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
-  const migrate = database.transaction(() => {
-    database.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      first_name TEXT NOT NULL,
-      last_name TEXT NOT NULL,
-      birth_date TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT NOT NULL,
-      app_account_token TEXT UNIQUE,
-      subscription_status TEXT NOT NULL DEFAULT 'free',
-      subscription_expire_date TEXT,
-      terms_version TEXT NOT NULL,
-      privacy_version TEXT NOT NULL,
-      accepted_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
+  try {
+    const state = inspectAccountSchema(database);
+    if (state === "legacy") {
+      throw new Error("Account profile migration requires offline approval and verified backup; run account:migrate before starting the backend.");
+    }
+    assertDatabaseHealthy(database);
+    database.transaction(() => {
+      if (inspectAccountSchema(database) === "legacy") throw new Error("Offline migration required");
+      prepareAccountTables(database);
+      assertDatabaseHealthy(database);
+    }).immediate();
+  } catch (error) {
+    closeAccountStore();
+    throw error;
+  }
 
-    CREATE TABLE IF NOT EXISTS account_sessions (
-      token_hash TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS account_sessions_user_id_idx
-      ON account_sessions(user_id);
-    CREATE INDEX IF NOT EXISTS account_sessions_expires_at_idx
-      ON account_sessions(expires_at);
-    `);
-
-    ensureColumn(database, "users", "subscription_status", "TEXT NOT NULL DEFAULT 'free'");
-    ensureColumn(database, "users", "subscription_expire_date", "TEXT");
-    ensureColumn(database, "users", "app_account_token", "TEXT");
-    const usersWithoutAppAccountToken = database.prepare(
-      "SELECT id FROM users WHERE app_account_token IS NULL OR app_account_token = ''"
-    ).all();
-    const updateAppAccountToken = database.prepare("UPDATE users SET app_account_token = ? WHERE id = ?");
-    for (const row of usersWithoutAppAccountToken) updateAppAccountToken.run(randomUUID(), row.id);
-    database.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS users_app_account_token_idx
-      ON users(app_account_token)
-      WHERE app_account_token IS NOT NULL;
-    `);
-    database.exec(`
-    CREATE TABLE IF NOT EXISTS conversion_history (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      file_name TEXT NOT NULL,
-      input_format TEXT NOT NULL,
-      output_format TEXT NOT NULL,
-      file_size_bytes INTEGER NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS conversion_history_user_created_idx
-      ON conversion_history(user_id, created_at DESC);
-    `);
-  });
-  migrate.immediate();
-
-  dummyPasswordHash = await argon2.hash(randomBytes(32), passwordHashOptions);
-  deleteExpiredSessions();
+  try {
+    database.pragma("journal_mode = WAL");
+    dummyPasswordHash = await argon2.hash(randomBytes(32), passwordHashOptions);
+    deleteExpiredSessions();
+  } catch (error) {
+    closeAccountStore();
+    throw error;
+  }
 }
 
 export function closeAccountStore() {
@@ -106,9 +67,12 @@ export async function registerAccount(input) {
   const user = {
     id: randomUUID(),
     appAccountToken: randomUUID(),
-    firstName: input.firstName.trim(),
-    lastName: input.lastName.trim(),
-    birthDate: input.birthDate,
+    firstName: input.firstName?.trim() || null,
+    lastName: input.lastName?.trim() || null,
+    birthDate: null,
+    ageAttestedAt: input.minimumAge ? now : null,
+    ageAttestedMinimum: input.minimumAge ?? null,
+    ageAttestationSource: input.ageAttestationSource ?? null,
     email,
     termsVersion: config.termsVersion,
     privacyVersion: config.privacyVersion,
@@ -118,17 +82,12 @@ export async function registerAccount(input) {
   };
 
   try {
-    db.prepare(`
-      INSERT INTO users (
-        id, first_name, last_name, birth_date, email, password_hash,
-        app_account_token, terms_version, privacy_version, accepted_at, created_at, updated_at
-      ) VALUES (
-        @id, @firstName, @lastName, @birthDate, @email, @passwordHash,
-        @appAccountToken, @termsVersion, @privacyVersion, @acceptedAt, @createdAt, @updatedAt
-      )
-    `).run({ ...user, passwordHash });
+    return db.transaction(() => {
+      user.username = insertProfile(db, { ...user, passwordHash });
+      return createAuthenticatedAccount(user);
+    }).immediate();
   } catch (error) {
-    if (String(error?.code).startsWith("SQLITE_CONSTRAINT")) {
+    if (error?.code === "SQLITE_CONSTRAINT_UNIQUE" && error.message === "UNIQUE constraint failed: users.email") {
       throw new HttpError(409, "An account already exists for this email address.", {
         code: "ACCOUNT_EXISTS"
       });
@@ -136,7 +95,6 @@ export async function registerAccount(input) {
     throw error;
   }
 
-  return createAuthenticatedAccount(user);
 }
 
 export async function loginAccount({ email, password }) {
@@ -305,12 +263,12 @@ function createAuthenticatedAccount(user) {
   };
 }
 
-function publicUser(user) {
+export function publicUser(user) {
   return {
     id: user.id,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    birthDate: user.birthDate,
+    username: user.username,
+    firstName: user.firstName ?? "",
+    lastName: user.lastName ?? "",
     email: user.email,
     appAccountToken: user.appAccountToken,
     subscriptionStatus: user.subscriptionStatus ?? "free",
@@ -325,6 +283,7 @@ function publicUser(user) {
 function mapUser(row) {
   return {
     id: row.id,
+    username: row.username,
     firstName: row.first_name,
     lastName: row.last_name,
     birthDate: row.birth_date,
@@ -362,12 +321,6 @@ function mapConversionHistoryItem(row) {
     status: row.status,
     createdAt: row.created_at
   });
-}
-
-function ensureColumn(db, tableName, columnName, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  if (columns.some((column) => column.name === columnName)) return;
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 function tableExists(db, tableName) {

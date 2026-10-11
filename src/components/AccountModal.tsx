@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   ActivityIndicator,
+  Alert,
   findNodeHandle,
   KeyboardAvoidingView,
   Modal,
@@ -13,7 +14,6 @@ import {
   View
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { Language } from "../i18n";
 import {
   AccountUser,
@@ -21,8 +21,12 @@ import {
   deleteAccount,
   loginAccount,
   logoutAccount,
-  registerAccount
+  registerAccount,
+  getRegistrationPolicy
 } from "../services/authService";
+import { accountDisplayName } from "../services/accountValidation";
+import { finishDeletedAccount } from "../services/accountDeletion";
+import { authErrorMessage, profileCopy } from "../services/authMessages";
 import { getTheme } from "../theme";
 import { InstagramGradient } from "./ui/InstagramGradient";
 
@@ -54,11 +58,6 @@ type Copy = {
   register: string;
   firstName: string;
   lastName: string;
-  birthDate: string;
-  birthHint: string;
-  chooseDate: string;
-  datePickerTitle: string;
-  done: string;
   email: string;
   password: string;
   confirmPassword: string;
@@ -72,7 +71,6 @@ type Copy = {
   mismatch: string;
   acceptanceRequired: string;
   missingFields: string;
-  invalidBirthDate: string;
   accountExists: string;
   invalidCredentials: string;
   networkError: string;
@@ -98,11 +96,6 @@ const en: Copy = {
   register: "Create account",
   firstName: "First name",
   lastName: "Last name",
-  birthDate: "Date of birth",
-  birthHint: "YYYY/MM/DD",
-  chooseDate: "Choose date",
-  datePickerTitle: "Choose your date of birth",
-  done: "Done",
   email: "Email",
   password: "Password",
   confirmPassword: "Repeat password",
@@ -116,7 +109,6 @@ const en: Copy = {
   mismatch: "Passwords do not match.",
   acceptanceRequired: "You must accept the Terms of Use and Privacy Policy.",
   missingFields: "Complete all required fields.",
-  invalidBirthDate: "Enter the date of birth as YYYY/MM/DD.",
   accountExists: "An account already exists for this email address.",
   invalidCredentials: "Email address or password is incorrect.",
   networkError: "The account service is currently unavailable. Please try again.",
@@ -145,10 +137,10 @@ const copies: Record<Language, Copy> = {
   tr: {
     ...en,
     title: "Editio hesabı", subtitle: "Güvenli biçimde oturum açın veya hesap oluşturun.", login: "Oturum aç", register: "Hesap oluştur",
-    firstName: "Ad", lastName: "Soyad", birthDate: "Doğum tarihi", birthHint: "YYYY/AA/GG", chooseDate: "Tarih seç", datePickerTitle: "Doğum tarihinizi seçin", done: "Bitti", email: "E-posta", password: "Şifre", confirmPassword: "Şifreyi tekrar girin",
+    firstName: "Ad", lastName: "Soyad", email: "E-posta", password: "Şifre", confirmPassword: "Şifreyi tekrar girin",
     passwordHint: "En az 10 karakter; büyük harf, küçük harf ve sayı içermeli.", acceptPrefix: "Okudum ve", terms: "Kullanım Koşulları", and: "ile", privacy: "Gizlilik Politikası", acceptSuffix: "metinlerini kabul ediyorum.",
     secureNotice: "Şifreler tek yönlü hash ile korunur. Yalnızca dönüşüm bilgileri kaydedilir; dönüştürülen dosyalar hesabınızda saklanmaz.", mismatch: "Şifreler eşleşmiyor.", acceptanceRequired: "Kullanım Koşulları ve Gizlilik Politikası'nı kabul etmelisiniz.",
-    missingFields: "Tüm zorunlu alanları doldurun.", invalidBirthDate: "Doğum tarihini YYYY/AA/GG biçiminde girin.", accountExists: "Bu e-posta adresiyle zaten bir hesap var.", invalidCredentials: "E-posta adresi veya şifre hatalı.",
+    missingFields: "Tüm zorunlu alanları doldurun.", accountExists: "Bu e-posta adresiyle zaten bir hesap var.", invalidCredentials: "E-posta adresi veya şifre hatalı.",
     networkError: "Hesap servisine şu anda ulaşılamıyor. Lütfen yeniden deneyin.", genericError: "Hesap işlemi tamamlanamadı.", signedInAs: "Oturum açılan hesap", signOut: "Çıkış yap", deleteAccount: "Hesabı sil",
     deleteWarning: "Hesabınızı ve aktif oturumlarınızı kalıcı olarak silmek için şifrenizi girin.", deleteConfirm: "Kalıcı olarak sil", cancel: "Vazgeç",
     benefitsTitle: "Editio hesabı oluşturun",
@@ -158,27 +150,27 @@ const copies: Record<Language, Copy> = {
     manageSubscription: "Apple aboneliğini yönet"
   },
   zh: {
-    ...en, title: "Editio 帐户", subtitle: "安全登录或创建帐户。", login: "登录", register: "创建帐户", firstName: "名字", lastName: "姓氏", birthDate: "出生日期", email: "电子邮件", password: "密码", confirmPassword: "再次输入密码",
+    ...en, title: "Editio 帐户", subtitle: "安全登录或创建帐户。", login: "登录", register: "创建帐户", firstName: "名字", lastName: "姓氏", email: "电子邮件", password: "密码", confirmPassword: "再次输入密码",
     acceptPrefix: "我已阅读并接受", terms: "使用条款", and: "和", privacy: "隐私政策", acceptSuffix: "。", signedInAs: "已登录", signOut: "退出登录", deleteAccount: "删除帐户", deleteConfirm: "永久删除", cancel: "取消",
     benefitsTitle: "创建 Editio 帐户", benefits: ["将转换记录保存在您的帐户中", "集中查看文件名、格式、状态和日期", "重新登录后继续访问帐户历史记录", "在登录同一帐户的设备上查看转换记录"], historyLoginPrompt: "登录后可保存并查看转换历史。", accountStatus: "帐户已启用"
   },
   fr: {
-    ...en, title: "Compte Editio", subtitle: "Connectez-vous ou créez un compte sécurisé.", login: "Connexion", register: "Créer un compte", firstName: "Prénom", lastName: "Nom", birthDate: "Date de naissance", email: "E-mail", password: "Mot de passe", confirmPassword: "Répéter le mot de passe",
+    ...en, title: "Compte Editio", subtitle: "Connectez-vous ou créez un compte sécurisé.", login: "Connexion", register: "Créer un compte", firstName: "Prénom", lastName: "Nom", email: "E-mail", password: "Mot de passe", confirmPassword: "Répéter le mot de passe",
     acceptPrefix: "J'ai lu et j'accepte les", terms: "Conditions d'utilisation", and: "et la", privacy: "Politique de confidentialité", acceptSuffix: ".", signedInAs: "Connecté en tant que", signOut: "Déconnexion", deleteAccount: "Supprimer le compte", deleteConfirm: "Supprimer définitivement", cancel: "Annuler",
     benefitsTitle: "Créez votre compte Editio", benefits: ["Conservez vos conversions dans votre compte", "Consultez le nom, le format, l’état et la date au même endroit", "Retrouvez l’historique de votre compte après reconnexion", "Affichez vos conversions sur les appareils connectés au même compte"], historyLoginPrompt: "Connectez-vous pour enregistrer et voir votre historique.", accountStatus: "Compte actif"
   },
   ru: {
-    ...en, title: "Аккаунт Editio", subtitle: "Безопасно войдите или создайте аккаунт.", login: "Войти", register: "Создать аккаунт", firstName: "Имя", lastName: "Фамилия", birthDate: "Дата рождения", email: "Эл. почта", password: "Пароль", confirmPassword: "Повторите пароль",
+    ...en, title: "Аккаунт Editio", subtitle: "Безопасно войдите или создайте аккаунт.", login: "Войти", register: "Создать аккаунт", firstName: "Имя", lastName: "Фамилия", email: "Эл. почта", password: "Пароль", confirmPassword: "Повторите пароль",
     acceptPrefix: "Я прочитал и принимаю", terms: "Условия использования", and: "и", privacy: "Политику конфиденциальности", acceptSuffix: ".", signedInAs: "Выполнен вход", signOut: "Выйти", deleteAccount: "Удалить аккаунт", deleteConfirm: "Удалить навсегда", cancel: "Отмена",
     benefitsTitle: "Создайте аккаунт Editio", benefits: ["Храните записи конвертаций в аккаунте", "Просматривайте имя файла, формат, статус и дату в одном месте", "Получайте доступ к истории после повторного входа", "Просматривайте записи на устройствах с тем же аккаунтом"], historyLoginPrompt: "Войдите, чтобы сохранять и просматривать историю.", accountStatus: "Аккаунт активен"
   },
   de: {
-    ...en, title: "Editio-Konto", subtitle: "Sicher anmelden oder ein Konto erstellen.", login: "Anmelden", register: "Konto erstellen", firstName: "Vorname", lastName: "Nachname", birthDate: "Geburtsdatum", email: "E-Mail", password: "Passwort", confirmPassword: "Passwort wiederholen",
+    ...en, title: "Editio-Konto", subtitle: "Sicher anmelden oder ein Konto erstellen.", login: "Anmelden", register: "Konto erstellen", firstName: "Vorname", lastName: "Nachname", email: "E-Mail", password: "Passwort", confirmPassword: "Passwort wiederholen",
     acceptPrefix: "Ich habe die", terms: "Nutzungsbedingungen", and: "und die", privacy: "Datenschutzerklärung", acceptSuffix: "gelesen und akzeptiere sie.", signedInAs: "Angemeldet als", signOut: "Abmelden", deleteAccount: "Konto löschen", deleteConfirm: "Dauerhaft löschen", cancel: "Abbrechen",
     benefitsTitle: "Editio-Konto erstellen", benefits: ["Konvertierungseinträge im Konto speichern", "Dateiname, Format, Status und Datum zentral ansehen", "Nach erneuter Anmeldung wieder auf den Kontoverlauf zugreifen", "Einträge auf Geräten mit demselben Konto ansehen"], historyLoginPrompt: "Melden Sie sich an, um Ihren Verlauf zu speichern und anzusehen.", accountStatus: "Aktives Konto"
   },
   es: {
-    ...en, title: "Cuenta Editio", subtitle: "Inicia sesión o crea una cuenta segura.", login: "Iniciar sesión", register: "Crear cuenta", firstName: "Nombre", lastName: "Apellido", birthDate: "Fecha de nacimiento", email: "Correo", password: "Contraseña", confirmPassword: "Repetir contraseña",
+    ...en, title: "Cuenta Editio", subtitle: "Inicia sesión o crea una cuenta segura.", login: "Iniciar sesión", register: "Crear cuenta", firstName: "Nombre", lastName: "Apellido", email: "Correo", password: "Contraseña", confirmPassword: "Repetir contraseña",
     acceptPrefix: "He leído y acepto los", terms: "Términos de uso", and: "y la", privacy: "Política de privacidad", acceptSuffix: ".", signedInAs: "Sesión iniciada como", signOut: "Cerrar sesión", deleteAccount: "Eliminar cuenta", deleteConfirm: "Eliminar permanentemente", cancel: "Cancelar",
     benefitsTitle: "Crea tu cuenta Editio", benefits: ["Guarda los registros de conversión en tu cuenta", "Consulta nombre, formato, estado y fecha en un solo lugar", "Recupera el historial de tu cuenta al volver a iniciar sesión", "Consulta tus registros en dispositivos con la misma cuenta"], historyLoginPrompt: "Inicia sesión para guardar y ver tu historial.", accountStatus: "Cuenta activa"
   }
@@ -202,9 +194,10 @@ export function AccountModal({
   const [mode, setMode] = useState<AccountMode>("login");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [birthDate, setBirthDate] = useState("");
-  const [birthDatePickerVisible, setBirthDatePickerVisible] = useState(false);
-  const [pendingBirthDate, setPendingBirthDate] = useState(() => defaultBirthDate());
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [minimumAge, setMinimumAge] = useState<number | null>(null);
+  const [policyRetry, setPolicyRetry] = useState(0);
+  const [policyError, setPolicyError] = useState<unknown>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -216,16 +209,17 @@ export function AccountModal({
   const formScrollRef = useRef<ScrollView>(null);
   const firstNameRef = useRef<TextInput>(null);
   const lastNameRef = useRef<TextInput>(null);
-  const birthDateRef = useRef<TextInput>(null);
+  const busyRef = useRef(false);
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const confirmPasswordRef = useRef<TextInput>(null);
   const borderColor = theme.isDark ? theme.colors.border : "#C7C9D1";
   const fieldColor = theme.colors.surfaceAlt;
 
-  const displayName = useMemo(() => user ? `${user.firstName} ${user.lastName}`.trim() : "", [user]);
+  const displayName = useMemo(() => user ? accountDisplayName(user) : "", [user]);
 
   const revealInput = (inputRef: RefObject<TextInput | null>) => {
+    if (Platform.OS === "web") return;
     const delay = Platform.OS === "ios" ? 140 : 80;
     setTimeout(() => {
       const inputHandle = findNodeHandle(inputRef.current);
@@ -248,34 +242,32 @@ export function AccountModal({
       setPasswordVisible(false);
       setError(null);
       setDeleting(false);
-      setBirthDatePickerVisible(false);
     }
   }, [visible]);
 
-  const submit = async () => {
-    setError(null);
-    if (!email.trim() || !password || (mode === "register" && (!firstName.trim() || !lastName.trim() || !birthDate.trim() || !confirmPassword))) {
-      setError(copy.missingFields);
-      return;
-    }
-    const parsedBirthDate = mode === "register" ? parseBirthDateInput(birthDate) : null;
-    if (mode === "register" && !parsedBirthDate) {
-      setError(copy.invalidBirthDate);
-      return;
-    }
-    if (mode === "register" && password !== confirmPassword) {
-      setError(copy.mismatch);
-      return;
-    }
-    if (mode === "register" && !acceptedTerms) {
-      setError(copy.acceptanceRequired);
-      return;
-    }
+  const profile = profileCopy(language, minimumAge ?? 13);
+  useEffect(() => {
+    if (!visible || mode !== "register" || user) return;
+    let active = true;
+    setMinimumAge(null); setAgeConfirmed(false); setPolicyError(null);
+    getRegistrationPolicy().then(policy => { if (active) setMinimumAge(policy.minimumAge); })
+      .catch(caught => { if (active) setPolicyError(caught); });
+    return () => { active = false; };
+  }, [visible, mode, user, policyRetry]);
 
+  const submit = async () => {
+    if (busyRef.current) return;
+    setError(null);
+    if (!email.trim() || !password || (mode === "register" && !confirmPassword)) {
+      setError(profile.missing); return;
+    }
+    if (mode === "register" && password !== confirmPassword) { setError(profile.mismatch); return; }
+    if (mode === "register" && minimumAge === null) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const nextUser = mode === "register"
-        ? await registerAccount({ firstName, lastName, birthDate: toApiDate(parsedBirthDate!), email, password, acceptedTerms: true })
+        ? await registerAccount({ firstName, lastName, email: email.trim(), password, acceptedTerms, ageConfirmed, minimumAge: minimumAge! })
         : await loginAccount(email, password);
       onUserChange(nextUser);
       setPassword("");
@@ -284,69 +276,71 @@ export function AccountModal({
       if (mode === "register") {
         setFirstName("");
         setLastName("");
-        setBirthDate("");
+        setAgeConfirmed(false);
         setEmail("");
         setAcceptedTerms(false);
         onLifecycleSuccess("created");
       }
     } catch (caught) {
-      setError(errorMessage(caught, copy));
+      setError(authErrorMessage(caught, language));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   const signOut = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
       await logoutAccount();
-      await onSessionEnd("signedOut");
       onUserChange(null);
+      await onSessionEnd("signedOut");
     } catch (caught) {
-      setError(errorMessage(caught, copy));
+      onUserChange(null);
+      try { await onSessionEnd("signedOut"); } catch { /* Device session already blocked. */ }
+      setError(authErrorMessage(caught, language));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   const removeAccount = async () => {
+    if (busyRef.current) return;
     if (!password) {
-      setError(copy.missingFields);
+      setError(profile.missing);
       return;
     }
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      await deleteAccount(password);
-      await onSessionEnd("deleted");
-      onUserChange(null);
-      setFirstName("");
-      setLastName("");
-      setBirthDate("");
-      setEmail("");
-      setPassword("");
-      setConfirmPassword("");
-      setAcceptedTerms(false);
-      setDeleting(false);
-      onLifecycleSuccess("deleted");
+      const result = await deleteAccount(password);
+      await finishDeletedAccount(result, {
+        clearUi: () => {
+          onUserChange(null);
+          setFirstName("");
+          setLastName("");
+          setAgeConfirmed(false);
+          setEmail("");
+          setPassword("");
+          setConfirmPassword("");
+          setAcceptedTerms(false);
+          setDeleting(false);
+        },
+        onSuccess: () => onLifecycleSuccess("deleted"),
+        endSession: () => onSessionEnd("deleted"),
+        onCleanupPending: () => Alert.alert(authErrorMessage(new AuthApiError("ACCOUNT_DELETED_CLEANUP_PENDING"), language))
+      });
     } catch (caught) {
-      setError(errorMessage(caught, copy));
+      setError(authErrorMessage(caught, language));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
-  };
-
-  const openBirthDatePicker = () => {
-    setPendingBirthDate(parseBirthDateInput(birthDate) ?? defaultBirthDate());
-    setBirthDatePickerVisible(true);
-  };
-
-  const applyBirthDate = () => {
-    setBirthDate(formatDisplayDate(pendingBirthDate));
-    setBirthDatePickerVisible(false);
-    setError(null);
-    setTimeout(() => focusInput(emailRef), 240);
   };
 
   return (
@@ -377,11 +371,12 @@ export function AccountModal({
             {user ? (
               <View style={styles.signedIn}>
                 <View style={[styles.avatar, { backgroundColor: theme.colors.primarySoft }]}>
-                  <Text style={[styles.avatarText, { color: theme.colors.primary }]}>{user.firstName.slice(0, 1).toLocaleUpperCase()}</Text>
+                  <Text style={[styles.avatarText, { color: theme.colors.primary }]}>{displayName.slice(0, 1).toLocaleUpperCase()}</Text>
                 </View>
                 <Text style={[styles.signedLabel, { color: theme.colors.muted }]}>{copy.signedInAs}</Text>
-                <Text style={[styles.signedName, { color: theme.colors.text }]}>{displayName}</Text>
+                <Text numberOfLines={1} ellipsizeMode="middle" style={[styles.signedName, { color: theme.colors.text }]}>{displayName}</Text>
                 <Text style={[styles.signedEmail, { color: theme.colors.muted }]}>{user.email}</Text>
+                {user.username ? <Text selectable style={[styles.signedEmail, { color: theme.colors.text }]}>{profile.username}: {user.username}</Text> : null}
                 <View style={[styles.planBadge, { backgroundColor: theme.colors.accentSoft }]}>
                   <Feather name="star" size={13} color={theme.colors.accent} />
                   <Text style={[styles.planBadgeText, { color: theme.colors.accent }]}>{copy.accountStatus}</Text>
@@ -458,7 +453,7 @@ export function AccountModal({
                         onSubmitEditing={() => focusInput(lastNameRef)}
                         returnKeyType="next"
                         blurOnSubmit={false}
-                        placeholder={copy.firstName}
+                        placeholder={`${copy.firstName} (${profile.optional})`}
                         theme={theme}
                         borderColor={borderColor}
                       />
@@ -467,39 +462,13 @@ export function AccountModal({
                         value={lastName}
                         onChangeText={setLastName}
                         onFocus={() => revealInput(lastNameRef)}
-                        onSubmitEditing={() => focusInput(birthDateRef)}
+                        onSubmitEditing={() => focusInput(emailRef)}
                         returnKeyType="next"
                         blurOnSubmit={false}
-                        placeholder={copy.lastName}
+                        placeholder={`${copy.lastName} (${profile.optional})`}
                         theme={theme}
                         borderColor={borderColor}
                       />
-                    </View>
-                    <View style={[styles.birthDateRow, { backgroundColor: theme.colors.surfaceAlt, borderColor }]}>
-                      <TextInput
-                        ref={birthDateRef}
-                        accessibilityLabel={copy.birthDate}
-                        autoCorrect={false}
-                        blurOnSubmit={false}
-                        inputMode="numeric"
-                        keyboardType="number-pad"
-                        maxLength={10}
-                        onBlur={() => {
-                          const parsed = parseBirthDateInput(birthDate);
-                          if (parsed) setBirthDate(formatDisplayDate(parsed));
-                        }}
-                        onChangeText={(value) => setBirthDate(maskBirthDateInput(value))}
-                        onFocus={() => revealInput(birthDateRef)}
-                        onSubmitEditing={() => focusInput(emailRef)}
-                        placeholder={`${copy.birthDate} · ${copy.birthHint}`}
-                        placeholderTextColor={theme.colors.muted}
-                        returnKeyType="next"
-                        style={[styles.birthDateInput, { color: theme.colors.text }]}
-                        value={birthDate}
-                      />
-                      <TouchableOpacity accessibilityLabel={copy.chooseDate} style={styles.birthDateButton} onPress={openBirthDatePicker}>
-                        <Feather name="calendar" size={19} color={theme.colors.primary} />
-                      </TouchableOpacity>
                     </View>
                   </>
                 ) : null}
@@ -546,7 +515,11 @@ export function AccountModal({
                       theme={theme}
                       borderColor={borderColor}
                     />
-                    <Text style={[styles.hint, { color: theme.colors.muted }]}>{copy.passwordHint}</Text>
+                    <Text style={[styles.hint, { color: theme.colors.muted }]}>{authErrorMessage(new AuthApiError("AUTH_INVALID_PASSWORD"), language)}</Text>
+                    {minimumAge !== null ? <TouchableOpacity accessibilityRole="checkbox" accessibilityLabel={profile.age} accessibilityState={{ checked: ageConfirmed }} onPress={() => { setAgeConfirmed(value => !value); setError(null); }} style={styles.acceptRow}>
+                      <View style={[styles.checkbox, { borderColor, backgroundColor: ageConfirmed ? theme.colors.primary : "transparent" }]}>{ageConfirmed ? <Feather name="check" size={15} color="#FFFFFF" /> : null}</View>
+                      <Text style={[styles.acceptText, { color: theme.colors.text, flex: 1 }]}>{profile.age}</Text>
+                    </TouchableOpacity> : policyError ? <View><Text style={styles.error}>{authErrorMessage(policyError, language)}</Text><TouchableOpacity accessibilityRole="button" onPress={() => setPolicyRetry(value => value + 1)}><Text style={{ color: theme.colors.primary }}>{profile.retry}</Text></TouchableOpacity></View> : <ActivityIndicator color={theme.colors.primary} />}
                     <View style={styles.acceptRow}>
                       <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: acceptedTerms }} style={[styles.checkbox, { borderColor: acceptedTerms ? theme.colors.primary : borderColor, backgroundColor: acceptedTerms ? theme.colors.primary : "transparent" }]} onPress={() => setAcceptedTerms((current) => !current)}>
                         {acceptedTerms ? <Feather name="check" size={15} color="#FFFFFF" /> : null}
@@ -569,7 +542,7 @@ export function AccountModal({
                 ) : null}
 
                 {error ? <Text style={styles.error}>{error}</Text> : null}
-                <TouchableOpacity disabled={busy} activeOpacity={0.88} onPress={() => void submit()}>
+                <TouchableOpacity disabled={busy || (mode === "register" && minimumAge === null)} activeOpacity={0.88} onPress={() => void submit()}>
                   <InstagramGradient theme={theme} style={[styles.submit, busy && styles.disabled]}>
                     {busy ? <ActivityIndicator color="#FFFFFF" /> : <Feather name={mode === "login" ? "log-in" : "user-plus"} size={18} color="#FFFFFF" />}
                     <Text style={styles.submitText}>{mode === "login" ? copy.login : copy.register}</Text>
@@ -581,86 +554,8 @@ export function AccountModal({
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-      <Modal
-        animationType="fade"
-        transparent
-        visible={birthDatePickerVisible}
-        supportedOrientations={["portrait", "portrait-upside-down", "landscape", "landscape-left", "landscape-right"]}
-        onRequestClose={() => setBirthDatePickerVisible(false)}
-      >
-        <View style={styles.datePickerOverlay}>
-          <View style={[styles.datePickerCard, isLandscape && styles.datePickerCardLandscape, { backgroundColor: theme.colors.surface, borderColor }]}>
-            <View style={styles.datePickerHeader}>
-              <Text style={[styles.datePickerTitle, { color: theme.colors.text }]}>{copy.datePickerTitle}</Text>
-              <TouchableOpacity accessibilityLabel={copy.cancel} style={[styles.datePickerClose, { backgroundColor: theme.colors.surfaceAlt }]} onPress={() => setBirthDatePickerVisible(false)}>
-                <Feather name="x" size={18} color={theme.colors.muted} />
-              </TouchableOpacity>
-            </View>
-            <DateTimePicker
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              maximumDate={maximumBirthDate()}
-              minimumDate={new Date(1900, 0, 1, 12)}
-              mode="date"
-              onChange={(_, date) => {
-                if (date) setPendingBirthDate(date);
-              }}
-              style={styles.datePicker}
-              themeVariant={theme.isDark ? "dark" : "light"}
-              value={pendingBirthDate}
-            />
-            <TouchableOpacity activeOpacity={0.88} onPress={applyBirthDate}>
-              <InstagramGradient theme={theme} style={styles.datePickerDone}>
-                <Feather name="check" size={18} color="#FFFFFF" />
-                <Text style={styles.submitText}>{copy.done}</Text>
-              </InstagramGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </Modal>
   );
-}
-
-function maskBirthDateInput(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 8);
-  const parts = [digits.slice(0, 4), digits.slice(4, 6), digits.slice(6, 8)].filter(Boolean);
-  return parts.join("/");
-}
-
-function parseBirthDateInput(value: string) {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length !== 8) return null;
-
-  const year = Number(digits.slice(0, 4));
-  const second = Number(digits.slice(4, 6));
-  const third = Number(digits.slice(6, 8));
-  const month = second <= 12 ? second : third;
-  const day = second <= 12 ? third : second;
-  const date = new Date(year, month - 1, day, 12);
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
-  return date;
-}
-
-function formatDisplayDate(date: Date) {
-  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function toApiDate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function defaultBirthDate() {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - 18);
-  date.setHours(12, 0, 0, 0);
-  return date;
-}
-
-function maximumBirthDate() {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - 13);
-  date.setHours(12, 0, 0, 0);
-  return date;
 }
 
 function AccountInput({ inputRef, theme, borderColor, ...props }: React.ComponentProps<typeof TextInput> & { inputRef?: RefObject<TextInput | null>; theme: Theme; borderColor: string }) {
@@ -716,14 +611,6 @@ function PasswordField({
   );
 }
 
-function errorMessage(error: unknown, copy: Copy) {
-  const code = error instanceof AuthApiError ? error.code : "UNKNOWN";
-  if (code === "ACCOUNT_EXISTS") return copy.accountExists;
-  if (code === "INVALID_CREDENTIALS") return copy.invalidCredentials;
-  if (code === "NETWORK_ERROR" || code === "ERR_BACKEND_URL_MISSING") return copy.networkError;
-  return copy.genericError;
-}
-
 const styles = StyleSheet.create({
   overlay: { alignItems: "center", backgroundColor: "rgba(0,0,0,0.58)", flex: 1, justifyContent: "center", padding: 16 },
   modal: { borderRadius: 24, borderWidth: 1, maxHeight: "88%", maxWidth: 480, overflow: "hidden", padding: 18, width: "100%" },
@@ -742,9 +629,6 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: "row", gap: 10 },
   nameRowPortrait: { flexDirection: "column" },
   input: { borderRadius: 13, borderWidth: 1, flex: 1, fontSize: 14, minHeight: 48, paddingHorizontal: 12 },
-  birthDateRow: { alignItems: "center", borderRadius: 13, borderWidth: 1, flexDirection: "row", minHeight: 48 },
-  birthDateInput: { flex: 1, fontSize: 14, minHeight: 46, paddingLeft: 12 },
-  birthDateButton: { alignItems: "center", height: 46, justifyContent: "center", width: 48 },
   passwordRow: { alignItems: "center", borderRadius: 13, borderWidth: 1, flexDirection: "row", minHeight: 48 },
   passwordInput: { flex: 1, fontSize: 14, minHeight: 46, paddingHorizontal: 12 },
   passwordToggle: { alignItems: "center", height: 44, justifyContent: "center", width: 44 },
@@ -760,21 +644,13 @@ const styles = StyleSheet.create({
   error: { color: "#EF4444", fontSize: 12, fontWeight: "800", lineHeight: 17 },
   submit: { alignItems: "center", borderRadius: 13, flexDirection: "row", gap: 8, justifyContent: "center", minHeight: 48, paddingHorizontal: 14 },
   submitText: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
-  datePickerOverlay: { alignItems: "center", backgroundColor: "rgba(0,0,0,0.62)", flex: 1, justifyContent: "center", padding: 18 },
-  datePickerCard: { borderRadius: 24, borderWidth: 1, maxWidth: 420, padding: 18, width: "100%" },
-  datePickerCardLandscape: { maxWidth: 560, width: "58%" },
-  datePickerHeader: { alignItems: "center", flexDirection: "row", gap: 12 },
-  datePickerTitle: { flex: 1, fontSize: 16, fontWeight: "900", lineHeight: 21 },
-  datePickerClose: { alignItems: "center", borderRadius: 12, height: 36, justifyContent: "center", width: 36 },
-  datePicker: { alignSelf: "center", height: 216, width: "100%" },
-  datePickerDone: { alignItems: "center", borderRadius: 13, flexDirection: "row", gap: 8, justifyContent: "center", minHeight: 46, paddingHorizontal: 14 },
   disabled: { opacity: 0.68 },
   signedIn: { alignItems: "center", gap: 8, paddingVertical: 6 },
   avatar: { alignItems: "center", borderRadius: 28, height: 56, justifyContent: "center", width: 56 },
   avatarText: { fontSize: 22, fontWeight: "900" },
   signedLabel: { fontSize: 11, fontWeight: "800" },
-  signedName: { fontSize: 18, fontWeight: "900" },
-  signedEmail: { fontSize: 13, fontWeight: "700" },
+  signedName: { fontSize: 18, fontWeight: "900", width: "100%", textAlign: "center" },
+  signedEmail: { fontSize: 13, fontWeight: "700", width: "100%", textAlign: "center" },
   planBadge: { alignItems: "center", borderRadius: 999, flexDirection: "row", gap: 5, paddingHorizontal: 10, paddingVertical: 5 },
   planBadgeText: { fontSize: 11, fontWeight: "900" },
   benefits: { borderRadius: 16, borderWidth: 1, gap: 9, padding: 14 },

@@ -1,10 +1,10 @@
 export type Point = { x: number; y: number };
-export type Shot = Point & { vx: number; vy: number; time: number; remainder: number; entered: boolean; scored: boolean; done: boolean };
+export type Shot = Point & { vx: number; vy: number; time: number; remainder: number; entered: boolean; scored: boolean; done: boolean; impacts: number };
 
 export const court = Object.freeze({
   width: 360, height: 520, floor: 484, radius: 18, gravity: 650,
-  launch: { x: 70, y: 432 }, rim: { left: 232, right: 294, y: 208, radius: 4 },
-  board: { x: 310, top: 140, bottom: 235 }, netDepth: 32
+  launch: { x: 70, y: 432 }, rim: { left: 223, right: 303, y: 208, radius: 4 },
+  board: { x: 326, top: 137, bottom: 245, halfWidth: 3 }, netDepth: 32, netTaper: 8
 });
 
 /** Drag toward the desired flight direction; limit velocity independently of screen size. */
@@ -18,7 +18,7 @@ export function velocityForDrag(dx: number, dy: number): Point {
 }
 
 export function createShot(velocity: Point): Shot {
-  return { ...court.launch, vx: velocity.x, vy: velocity.y, time: 0, remainder: 0, entered: false, scored: false, done: false };
+  return { ...court.launch, vx: velocity.x, vy: velocity.y, time: 0, remainder: 0, entered: false, scored: false, done: false, impacts: 0 };
 }
 
 /** Fixed small steps prevent tunnelling through the rim, even after a slow display frame. */
@@ -61,23 +61,27 @@ function step(shot: Shot, dt: number): Shot {
     }
   }
   if (next.y + court.radius > court.board.top && next.y - court.radius < court.board.bottom &&
-      Math.abs(next.x - court.board.x) < court.radius + 3) {
+      Math.abs(next.x - court.board.x) < court.radius + court.board.halfWidth) {
     const side = shot.x < court.board.x ? -1 : 1;
-    next.x = court.board.x + side * (court.radius + 3);
+    next.x = court.board.x + side * (court.radius + court.board.halfWidth);
     next.vx = side * Math.abs(next.vx) * 0.65;
     collided = true;
   }
 
   const crossingX = (y: number) => shot.x + (next.x - shot.x) * (y - shot.y) / (next.y - shot.y);
-  const inside = (x: number) => x > court.rim.left + court.radius + court.rim.radius &&
-    x < court.rim.right - court.radius - court.rim.radius;
-  if (collided) next.entered = false;
+  const inside = (x: number, y: number) => {
+    const depth = Math.max(0, Math.min(1, (y - court.rim.y) / court.netDepth));
+    const clearance = court.radius + court.rim.radius * (1 - depth);
+    return x > court.rim.left + court.netTaper * depth + clearance &&
+      x < court.rim.right - court.netTaper * depth - clearance;
+  };
+  if (collided) { next.entered = false; next.impacts += 1; }
   if (!collided && next.vy > 0 && shot.y < court.rim.y && next.y >= court.rim.y) {
-    next.entered = inside(crossingX(court.rim.y));
+    next.entered = inside(crossingX(court.rim.y), court.rim.y);
   }
-  if (next.entered && !inside(next.x)) next.entered = false;
+  if (next.entered && !inside(next.x, next.y)) next.entered = false;
   const exitY = court.rim.y + court.netDepth;
-  if (next.entered && next.vy > 0 && shot.y < exitY && next.y >= exitY && inside(crossingX(exitY))) {
+  if (next.entered && next.vy > 0 && shot.y < exitY && next.y >= exitY && inside(crossingX(exitY), exitY)) {
     next.scored = true;
     next.done = true;
   }

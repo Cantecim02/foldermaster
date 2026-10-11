@@ -13,7 +13,11 @@
     "test:routing": "node scripts/run-routing-tests.cjs",
     "test:monetization": "node scripts/verify-monetization-config.cjs",
     "test:game": "node scripts/run-game-tests.cjs",
-    "prebuild": "expo prebuild"
+    "prebuild": "expo prebuild",
+    "test:basket-config": "node scripts/test-basket-config.cjs",
+    "test:auth": "node scripts/run-auth-tests.cjs",
+    "eas-build-pre-install": "node scripts/verify-basket-config.cjs",
+    "test:legal": "node scripts/test-account-legal.cjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

@@ -1,3 +1,4 @@
+import { qaFiveWins, qaNewRound, qaStorageKey } from "../src/game/fileBasketQa";
 import { advanceShot, court, createShot, predictShot, velocityForDrag } from "../src/game/fileBasketPhysics";
 import type { Shot } from "../src/game/fileBasketPhysics";
 import { attemptsLeft, awardHit, beginAttempt, emptyProgress, parseProgress, roundIntervalMs } from "../src/game/fileBasketRules";
@@ -79,4 +80,20 @@ let invalidRejected = false;
 try { parseProgress('{"version":1,"points":99,"previewCredits":0,"round":null}'); } catch { invalidRejected = true; }
 assert(invalidRejected, "Invalid saved state must not be accepted");
 assert(parseProgress(null).points === 0, "Missing save must start fresh");
-console.log(`File Basket: ${checks} physics and reward-rule checks passed.`);
+
+
+const normal = JSON.stringify(progress);
+const testProgress = qaFiveWins(progress, now + roundIntervalMs * 8);
+assert(testProgress.previewCredits === progress.previewCredits + 1 && testProgress.points === progress.points, "Five QA wins use real rules and create exactly one preview credit");
+assert(JSON.stringify(progress) === normal, "QA helpers must not mutate normal progress");
+assert(qaNewRound(progress).round === null && qaNewRound(progress).points === progress.points, "QA new round keeps prior points");
+assert(String(qaStorageKey) !== "editio.fileBasket.preview.v1", "QA must use separate local storage");
+let successfulAims = 0;
+for (let x = 115; x <= 165; x += 5) for (let y = -630; y <= -590; y += 5) {
+  if (Math.hypot(x, y) <= 640 && finish(createShot({ x, y })).scored) successfulAims++;
+}
+assert(successfulAims >= 8, "Several neighbouring realistic flicks must score without auto aim");
+assert(!finish(createShot({ x: 70, y: -420 })).scored, "Underpowered poorly aimed shots must still miss");
+assert(rimHit.impacts > 0 && boardHit.impacts > 0, "Solver exposes impact feedback for rim and board");
+assert(!finish({ ...downward, x: 270, vx: 50, vy: 300 }).scored, "A file cutting through the tapered net edge must not score");
+console.log(`File Basket: ${checks} physics, reward-rule and QA checks passed.`);

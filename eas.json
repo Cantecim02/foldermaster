@@ -10,7 +10,8 @@
       "env": {
         "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
         "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
-        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly",
+        "EXPO_PUBLIC_FILE_BASKET_QA": "false"
       }
     },
     "preview": {
@@ -19,7 +20,8 @@
         "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com",
         "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
         "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
-        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly",
+        "EXPO_PUBLIC_FILE_BASKET_QA": "false"
       },
       "ios": {
         "simulator": false
@@ -29,6 +31,20 @@
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_MEDIA_API_URL": "https://api.editioapp.com",
+        "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
+        "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
+        "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly",
+        "EXPO_PUBLIC_FILE_BASKET_QA": "false"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "basket-qa": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_FILE_BASKET_QA": "true",
         "EXPO_PUBLIC_MONETIZATION_ENABLED": "false",
         "EXPO_PUBLIC_EDITIO_MONTHLY_PRODUCT_ID": "com.cantecim.editio.pro.monthly",
         "EXPO_PUBLIC_EDITIO_YEARLY_PRODUCT_ID": "com.cantecim.editio.pro.yearly"

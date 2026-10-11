@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, AppState, Modal, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { Animated, AppState, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import type { GestureResponderEvent } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather, Ionicons } from "@expo/vector-icons";
-import Svg, { Circle, Defs, Ellipse, G, Line, LinearGradient, Path, Rect, Stop } from "react-native-svg";
+import Svg, { Circle, Defs, Ellipse, G, LinearGradient, Path, Stop } from "react-native-svg";
 import type { AppTheme } from "../theme";
 import type { Language } from "../i18n";
 import { basketCopy } from "../game/fileBasketCopy";
 import { advanceShot, court, createShot, predictShot, velocityForDrag } from "../game/fileBasketPhysics";
 import type { Point, Shot } from "../game/fileBasketPhysics";
 import { attemptsLeft, awardHit, beginAttempt, emptyProgress, parseProgress, roundIntervalMs } from "../game/fileBasketRules";
+import { FileBasketHoop } from "./FileBasketHoop";
+import { FileBasketTutorial, tutorialCopy } from "./FileBasketTutorial";
 import type { BasketProgress } from "../game/fileBasketRules";
 
+const QaPanel = require("./FileBasketQaPanel").default as typeof import("./FileBasketQaPanel").default;
+const qaStorageKey = require("./FileBasketQaPanel").qaStorageKey as string;
+const qaAvailable = __DEV__ || process.env.EXPO_PUBLIC_FILE_BASKET_QA === "true";
+const tutorialKey = "editio.fileBasket.tutorial.v2";
 const storageKey = "editio.fileBasket.preview.v1";
 type Phase = "loading" | "ready" | "saving" | "flying" | "miss" | "success" | "paused" | "error" | "loadError";
 
@@ -20,6 +26,14 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   const copy = basketCopy(language);
   const window = useWindowDimensions();
   const isLandscape = window.width > window.height;
+  const [tutorial, setTutorial] = useState(true);
+  const [tutorialLoaded, setTutorialLoaded] = useState(false);
+  const tutorialRef = useRef(true);
+  const [qaActive, setQaActive] = useState(false);
+  const progressKey = useRef(storageKey);
+  const [impact, setImpact] = useState(0);
+  const missFade = useRef(new Animated.Value(1)).current;
+  const [missOpacity, setMissOpacity] = useState(1);
   const [progress, setProgress] = useState<BasketProgress>(emptyProgress);
   const progressRef = useRef(progress);
   const [phase, setPhase] = useState<Phase>("loading");
@@ -38,7 +52,14 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   const offsetX = (layout.width - court.width * scale) / 2;
   const offsetY = (layout.height - court.height * scale) / 2;
   const left = attemptsLeft(progress, now);
-  const canAim = phase === "ready" && left > 0;
+  const canAim = phase === "ready" && left > 0 && tutorialLoaded && !tutorial;
+
+  useEffect(() => {
+    const id = missFade.addListener(({ value }) => setMissOpacity(value));
+    missFade.setValue(1);
+    if (phase === "miss") Animated.timing(missFade, { toValue: 0.35, duration: 550, useNativeDriver: false }).start();
+    return () => { missFade.stopAnimation(); missFade.removeListener(id); };
+  }, [phase, missFade]);
 
   function changePhase(next: Phase) {
     phaseRef.current = next;
@@ -48,7 +69,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   async function loadProgress() {
     changePhase("loading");
     try {
-      const saved = parseProgress(await AsyncStorage.getItem(storageKey));
+      const saved = parseProgress(await AsyncStorage.getItem(progressKey.current));
       if (!mounted.current) return;
       progressRef.current = saved;
       setProgress(saved);
@@ -60,7 +81,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   }
 
   async function saveProgress(next: BasketProgress) {
-    await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+    await AsyncStorage.setItem(progressKey.current, JSON.stringify(next));
     progressRef.current = next;
     if (mounted.current) setProgress(next);
   }
@@ -77,6 +98,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   useEffect(() => {
     mounted.current = true;
     void loadProgress();
+    AsyncStorage.getItem(tutorialKey).then(seen => { if (mounted.current) { tutorialRef.current = seen !== 'seen'; setTutorial(seen !== 'seen'); setTutorialLoaded(true); } }).catch(() => { if (mounted.current) setTutorialLoaded(true); });
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     const listener = AppState.addEventListener("change", (state) => {
       appState.current = state;
@@ -111,11 +133,12 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   }
 
   async function launch(aim: Point) {
-    if (phaseRef.current !== "ready" || aim.y > -150) return;
+    if (tutorialRef.current || !tutorialLoaded || phaseRef.current !== "ready" || aim.y > -150) return;
     const next = beginAttempt(progressRef.current, Date.now());
     if (!next?.round) return;
     const roundStartedAt = next.round.startedAt;
     changePhase("saving");
+    setImpact(0); setMissOpacity(1);
     setVelocity(null);
     aimRef.current = null;
     try {
@@ -131,7 +154,9 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
         if (!mounted.current || phaseRef.current !== "flying") return;
         const elapsed = previousTime === null ? 0 : Math.min((timestamp - previousTime) / 1000, 0.06);
         previousTime = timestamp;
+        const oldImpacts = current.impacts;
         current = advanceShot(current, elapsed);
+        setImpact(current.impacts > oldImpacts ? 1 : value => Math.max(0, value - elapsed * 4));
         setShot(current);
         if (current.done) void finishFlight(current, roundStartedAt);
         else frame.current = requestAnimationFrame(animate);
@@ -152,8 +177,8 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
 
   function moveDrag(event: GestureResponderEvent) {
     if (!drag.current) return;
-    const aim = velocityForDrag((event.nativeEvent.pageX - drag.current.pageX) / scale,
-      (event.nativeEvent.pageY - drag.current.pageY) / scale);
+    const aim = velocityForDrag((event.nativeEvent.pageX - drag.current.pageX) / Math.max(scale, 0.75),
+      (event.nativeEvent.pageY - drag.current.pageY) / Math.max(scale, 0.75));
     aimRef.current = aim;
     setVelocity(aim);
   }
@@ -172,7 +197,7 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
   const filePosition = shot && (phase !== "ready" && phase !== "loading") ? shot : court.launch;
   const dots = velocity && velocity.y < -150 ? predictShot(velocity) : [];
   const power = velocity ? Math.round(Math.hypot(velocity.x, velocity.y) / 640 * 100) : 0;
-  const resetShot = () => { setShot(null); setVelocity(null); setNow(Date.now()); changePhase("ready"); };
+  const resetShot = () => { setImpact(0); setMissOpacity(1); setShot(null); setVelocity(null); setNow(Date.now()); changePhase("ready"); };
 
   const statsPanel = (
           <View style={[styles.stats, { backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.border }]}>
@@ -200,6 +225,27 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
           </View>
   );
 
+  const controlsPanel = (<>
+          {isLandscape ? statsPanel : null}
+          <View style={styles.feedback} accessibilityLiveRegion="polite">
+            <Text style={[styles.feedbackTitle, { color: phase === "success" ? theme.colors.success : theme.colors.text }]}>{title}</Text>
+            <Text style={[styles.feedbackBody, { color: theme.colors.muted }]}>{body}</Text>
+            {(phase === "miss" || phase === "paused") && left > 0 ?
+              <TouchableOpacity accessibilityRole="button" style={[styles.next, { backgroundColor: theme.colors.primary }]} onPress={resetShot}>
+                <Text style={[styles.nextText, { color: theme.colors.onPrimary }]}>{copy.next}</Text>
+                <Feather name="arrow-right" size={18} color={theme.colors.onPrimary} />
+              </TouchableOpacity> : phase === "loadError" ?
+                <TouchableOpacity accessibilityRole="button" style={[styles.next, { backgroundColor: theme.colors.primary }]} onPress={() => void loadProgress()}>
+                  <Text style={[styles.nextText, { color: theme.colors.onPrimary }]}>{copy.retry}</Text>
+                </TouchableOpacity> : complete && left === 0 ?
+                  <Text style={[styles.countdown, { color: theme.colors.primary }]}>{countdown}</Text> : null}
+            {left > 0 && (phase === "success" || complete) ? <TouchableOpacity onPress={resetShot} accessibilityRole="button">
+              <Text style={{ color: theme.colors.primary }}>{copy.next}</Text>
+            </TouchableOpacity> : null}
+          </View>
+          {isLandscape ? noticePanel : null}
+  </>);
+
   return (
     <Modal visible animationType="slide" presentationStyle="fullScreen" supportedOrientations={["portrait", "landscape"]} onRequestClose={onClose}>
       <SafeAreaProvider>
@@ -213,11 +259,15 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
               <Text style={[styles.kicker, { color: theme.colors.primary }]}>{copy.daily}</Text>
               <Text style={[styles.title, { color: theme.colors.text }]}>{copy.title}</Text>
             </View>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel={tutorialCopy(language)[9]} disabled={phase === "flying" || phase === "saving"} onPress={() => { drag.current = null; aimRef.current = null; setVelocity(null); tutorialRef.current = true; setTutorial(true); }} style={styles.close}><Feather name="help-circle" size={24} color={theme.colors.primary} /></TouchableOpacity>
             <View style={[styles.gameIcon, { backgroundColor: theme.colors.primarySoft }]}>
               <Ionicons name="game-controller-outline" size={26} color={theme.colors.primary} />
             </View>
           </View>
 
+          {qaAvailable ? <QaPanel active={qaActive} busy={phase === "flying" || phase === "saving" || phase === "loading" || tutorial} progress={progress}
+            onToggle={() => { if (["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; progressKey.current = qaActive ? storageKey : qaStorageKey; setQaActive(!qaActive); setShot(null); setVelocity(null); void loadProgress(); }}
+            onChange={next => { if (["flying", "saving", "loading"].includes(phaseRef.current) || tutorialRef.current) return; changePhase("saving"); void saveProgress(next).then(() => { if (mounted.current) resetShot(); }).catch(() => { if (mounted.current) changePhase("error"); }); }} /> : null}
           {!isLandscape ? statsPanel : null}
           <View style={[styles.playArea, isLandscape && styles.playAreaLandscape]}>
 
@@ -246,23 +296,14 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
                 <Circle cx="268" cy="200" r="115" fill="url(#courtGlow)" opacity={0.6} />
                 <Circle cx="268" cy="200" r="92" stroke={theme.colors.border} strokeDasharray="3 9" fill="none" />
                 <Path d="M 18 484 H 342 M 32 490 L 55 506 H 312 L 334 490 M 135 484 Q 190 450 245 484"
-                  stroke={theme.colors.border} strokeWidth={2} fill="none" />
-                <Rect x={court.board.x - 3} y={court.board.top} width={6} height={court.board.bottom - court.board.top}
-                  rx={3} fill={theme.colors.text} />
-                <Path d="M 310 160 H 285 V 193 H 310" stroke={theme.colors.muted} strokeWidth={3} fill="none" />
-                <Line x1="311" y1="234" x2="311" y2="484" stroke={theme.colors.border} strokeWidth={5} />
-                <Path d="M 232 208 L 246 240 H 280 L 294 208 M 244 208 L 257 240 M 258 208 L 270 240 M 278 208 L 262 240 M 289 208 L 275 240 M 237 220 H 289 M 242 232 H 284"
-                  stroke={phase === "success" ? theme.colors.success : theme.colors.muted} strokeWidth={1.6} fill="none" />
-                <Line x1={court.rim.left} y1={court.rim.y} x2={court.rim.right} y2={court.rim.y}
-                  stroke={phase === "success" ? theme.colors.success : theme.colors.gradientStart} strokeWidth={5} strokeLinecap="round" />
-                <Circle cx={court.rim.left} cy={court.rim.y} r={4} fill={theme.colors.gradientStart} />
-                <Circle cx={court.rim.right} cy={court.rim.y} r={4} fill={theme.colors.gradientStart} />
+                  stroke={theme.isDark ? "#B86DA2" : "#8693A7"} strokeWidth={2.5} fill="none" />
+                <FileBasketHoop theme={theme} entered={!!shot?.entered} success={phase === "success"} impact={impact} />
                 {dots.map((point, index) => <Circle key={index} cx={point.x} cy={point.y} r={2.3}
                   fill={theme.colors.primary} opacity={1 - index / 55} />)}
                 <Ellipse cx={court.launch.x} cy={court.floor} rx={25} ry={5} fill={theme.colors.border} />
                 {canAim ? <Circle cx={court.launch.x} cy={court.launch.y} r={32} stroke={theme.colors.primary}
                   strokeWidth={1.5} strokeDasharray="4 6" fill={theme.colors.primarySoft} /> : null}
-                <G transform={`translate(${filePosition.x}, ${filePosition.y}) rotate(${shot && phase === "flying" ? shot.time * 160 : -12})`}>
+                <G opacity={missOpacity} transform={`translate(${filePosition.x}, ${filePosition.y}) rotate(${shot && phase === "flying" ? shot.time * 160 : -12})`}>
                   <Path d="M -10 -14 H 3 L 11 -6 V 14 H -10 Z" fill={theme.colors.primary} stroke={theme.colors.onPrimary} strokeWidth={1.5} />
                   <Path d="M 3 -14 V -6 H 11 M -5 1 H 5 M -5 6 H 5" fill="none" stroke={theme.colors.onPrimary} strokeWidth={1.7} strokeLinecap="round" />
                 </G>
@@ -287,28 +328,10 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
             </Animated.View>
           </View>
 
-          <View style={[styles.controls, isLandscape && styles.controlsLandscape]}>
-          {isLandscape ? statsPanel : null}
-          <View style={styles.feedback} accessibilityLiveRegion="polite">
-            <Text style={[styles.feedbackTitle, { color: phase === "success" ? theme.colors.success : theme.colors.text }]}>{title}</Text>
-            <Text style={[styles.feedbackBody, { color: theme.colors.muted }]}>{body}</Text>
-            {(phase === "miss" || phase === "paused") && left > 0 ?
-              <TouchableOpacity accessibilityRole="button" style={[styles.next, { backgroundColor: theme.colors.primary }]} onPress={resetShot}>
-                <Text style={[styles.nextText, { color: theme.colors.onPrimary }]}>{copy.next}</Text>
-                <Feather name="arrow-right" size={18} color={theme.colors.onPrimary} />
-              </TouchableOpacity> : phase === "loadError" ?
-                <TouchableOpacity accessibilityRole="button" style={[styles.next, { backgroundColor: theme.colors.primary }]} onPress={() => void loadProgress()}>
-                  <Text style={[styles.nextText, { color: theme.colors.onPrimary }]}>{copy.retry}</Text>
-                </TouchableOpacity> : complete && left === 0 ?
-                  <Text style={[styles.countdown, { color: theme.colors.primary }]}>{countdown}</Text> : null}
-            {left > 0 && (phase === "success" || complete) ? <TouchableOpacity onPress={resetShot} accessibilityRole="button">
-              <Text style={{ color: theme.colors.primary }}>{copy.next}</Text>
-            </TouchableOpacity> : null}
-          </View>
-          {isLandscape ? noticePanel : null}
-          </View>
+          {isLandscape ? <ScrollView style={styles.controlsLandscape} contentContainerStyle={styles.controlsScroll} showsVerticalScrollIndicator={false}>{controlsPanel}</ScrollView> : <View style={styles.controls}>{controlsPanel}</View>}
           </View>
           {!isLandscape ? noticePanel : null}
+          {tutorial && tutorialLoaded ? <FileBasketTutorial theme={theme} language={language} onDone={() => { tutorialRef.current = false; setTutorial(false); void AsyncStorage.setItem(tutorialKey, 'seen').catch(() => { /* Replay next time if persistence is unavailable. */ }); }} /> : null}
         </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -316,9 +339,9 @@ export function FileBasketScreen({ theme, language, onClose }: { theme: AppTheme
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, paddingHorizontal: 18, gap: 12 },
-  playArea: { flex: 1, gap: 12 }, playAreaLandscape: { flexDirection: "row" },
-  controls: { gap: 10 }, controlsLandscape: { width: "40%", justifyContent: "center" },
+  screen: { flex: 1, paddingHorizontal: 18, paddingBottom: 8, gap: 12 },
+  playArea: { flex: 1, minHeight: 0, gap: 12 }, playAreaLandscape: { flexDirection: "row" },
+  controls: { gap: 10 }, controlsLandscape: { width: "40%", flexGrow: 0 }, controlsScroll: { flexGrow: 1, justifyContent: "center", gap: 10, paddingBottom: 8 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingTop: 10 },
   close: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 15, borderWidth: 1 },
   heading: { flex: 1, gap: 3 }, kicker: { fontSize: 11, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1.5 },

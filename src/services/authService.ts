@@ -1,17 +1,26 @@
 import axios from "axios";
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { getApiBaseUrl } from "./mediaDownloaderApi";
+import { AuthApiError, normalizeAuthError } from "./authErrors";
+import { registrationError, type RegistrationInput } from "./accountValidation";
+export { AuthApiError } from "./authErrors";
 
 const sessionTokenKey = "editio.accountSession.v1";
+const sessionRevokedKey = "editio.accountSession.revoked.v1";
 let webSessionToken: string | null = null;
+let sessionSuppressed = false;
+let sessionGeneration = 0;
+
+export type AccountDeletionResult = { serverDeleted: true; deviceCleanupPending: boolean };
 
 export type AccountUser = {
   id: string;
   appAccountToken: string;
-  firstName: string;
-  lastName: string;
-  birthDate: string;
+  username?: string;
+  firstName?: string | null;
+  lastName?: string | null;
   email: string;
   subscriptionStatus: "free" | "premium";
   subscriptionExpireDate: string | null;
@@ -36,27 +45,25 @@ type AuthResponse = {
   session: { token: string; expiresAt: string };
 };
 
-export class AuthApiError extends Error {
-  constructor(public readonly code: string, message: string) {
-    super(message);
-    this.name = "AuthApiError";
+export async function getRegistrationPolicy() {
+  try {
+    const { data } = await axios.get<{ minimumAge: number; registrationVersion: number }>(`${getApiBaseUrl()}/auth/policy`, { timeout: 12_000 });
+    if (!data || data.registrationVersion !== 2 || !Number.isInteger(data.minimumAge) || data.minimumAge < 13 || data.minimumAge > 18) throw new AuthApiError("REGISTRATION_UPDATE_REQUIRED");
+    return data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) throw new AuthApiError("REGISTRATION_UPDATE_REQUIRED");
+    throw normalizeAuthError(error);
   }
 }
 
-export async function registerAccount(input: {
-  firstName: string;
-  lastName: string;
-  birthDate: string;
-  email: string;
-  password: string;
-  acceptedTerms: true;
-}) {
+export async function registerAccount(input: RegistrationInput) {
+  const invalid = registrationError(input);
+  if (invalid) throw new AuthApiError(invalid);
   try {
     const response = await axios.post<AuthResponse>(`${getApiBaseUrl()}/auth/register`, input, {
       timeout: 20_000
     });
-    await saveSessionToken(response.data.session.token);
-    return response.data.user;
+    return await acceptAuthResponse(response.data);
   } catch (error) {
     throw normalizeAuthError(error);
   }
@@ -67,14 +74,14 @@ export async function loginAccount(email: string, password: string) {
     const response = await axios.post<AuthResponse>(`${getApiBaseUrl()}/auth/login`, { email, password }, {
       timeout: 20_000
     });
-    await saveSessionToken(response.data.session.token);
-    return response.data.user;
+    return await acceptAuthResponse(response.data);
   } catch (error) {
     throw normalizeAuthError(error);
   }
 }
 
 export async function restoreAccountSession() {
+  const generation = sessionGeneration;
   const token = await readSessionToken();
   if (!token) return null;
 
@@ -83,10 +90,11 @@ export async function restoreAccountSession() {
       headers: { Authorization: `Bearer ${token}` },
       timeout: 12_000
     });
-    return response.data.user;
+    return generation === sessionGeneration && !sessionSuppressed ? response.data.user : null;
   } catch (error) {
+    if (generation !== sessionGeneration) return null;
     if (axios.isAxiosError(error) && error.response?.status === 401) {
-      await clearSessionToken();
+      await clearSessionToken().catch(() => {}); // Remote session is invalid even if device cleanup fails.
       return null;
     }
     throw normalizeAuthError(error);
@@ -116,15 +124,23 @@ export async function deleteAccount(password: string) {
   if (!token) throw new AuthApiError("AUTH_REQUIRED", "Authentication is required.");
 
   try {
-    await axios.delete(`${getApiBaseUrl()}/auth/account`, {
+    const response = await axios.delete(`${getApiBaseUrl()}/auth/account`, {
       headers: { Authorization: `Bearer ${token}` },
       data: { password },
       timeout: 20_000
     });
-    await clearSessionToken();
+    if (response.status !== 204) throw new AuthApiError("AUTH_INVALID_RESPONSE");
   } catch (error) {
-    throw normalizeAuthError(error);
+    const normalized = normalizeAuthError(error);
+    if (normalized.code === "NETWORK_ERROR" || normalized.code === "TIMEOUT") {
+      throw new AuthApiError("ACCOUNT_DELETE_UNCONFIRMED");
+    }
+    throw normalized;
   }
+  // A confirmed server deletion stays successful even if Keychain cleanup fails.
+  let deviceCleanupPending = false;
+  try { await clearSessionToken(); } catch { deviceCleanupPending = true; }
+  return { serverDeleted: true, deviceCleanupPending } satisfies AccountDeletionResult;
 }
 
 export async function listConversionHistory(limit = 30) {
@@ -172,18 +188,32 @@ export async function recordConversionHistory(input: {
 }
 
 async function saveSessionToken(token: string) {
+  sessionGeneration += 1;
   if (Platform.OS === "web") {
     webSessionToken = token;
+    sessionSuppressed = false;
     return;
   }
-  await SecureStore.setItemAsync(sessionTokenKey, token, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY
-  });
+  try {
+    sessionSuppressed = true;
+    await AsyncStorage.setItem(sessionRevokedKey, "true");
+    await SecureStore.setItemAsync(sessionTokenKey, token, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+    await AsyncStorage.removeItem(sessionRevokedKey);
+    sessionSuppressed = false;
+  } catch { throw new AuthApiError("SESSION_STORAGE_ERROR"); }
 }
 
 async function readSessionToken() {
+  const generation = sessionGeneration;
+  if (sessionSuppressed) return null;
   if (Platform.OS === "web") return webSessionToken;
-  return SecureStore.getItemAsync(sessionTokenKey);
+  try {
+    // This nonsecret tombstone survives restarts independently of Keychain deletion.
+    if (await AsyncStorage.getItem(sessionRevokedKey) === "true") return null;
+    const token = await SecureStore.getItemAsync(sessionTokenKey);
+    return generation === sessionGeneration && !sessionSuppressed ? token : null;
+  }
+  catch { throw new AuthApiError("SESSION_STORAGE_ERROR"); }
 }
 
 export async function getAccountSessionToken() {
@@ -191,21 +221,28 @@ export async function getAccountSessionToken() {
 }
 
 async function clearSessionToken() {
+  sessionGeneration += 1;
+  sessionSuppressed = true;
   if (Platform.OS === "web") {
     webSessionToken = null;
     return;
   }
-  await SecureStore.deleteItemAsync(sessionTokenKey);
+  // Block reads immediately; attempt both persistence mechanisms independently.
+  try { await AsyncStorage.setItem(sessionRevokedKey, "true"); } catch { /* Server deletion still invalidates the token remotely. */ }
+  try { await SecureStore.deleteItemAsync(sessionTokenKey); }
+  catch { throw new AuthApiError("SESSION_STORAGE_ERROR"); }
 }
 
-function normalizeAuthError(error: unknown) {
-  if (error instanceof AuthApiError) return error;
-  if (!axios.isAxiosError(error)) return new AuthApiError("UNKNOWN", "Account request failed.");
 
-  const payload = error.response?.data as { code?: string; message?: string; error?: string } | undefined;
-  if (!error.response) return new AuthApiError("NETWORK_ERROR", "Account service is unavailable.");
-  return new AuthApiError(
-    payload?.code ?? `HTTP_${error.response.status}`,
-    payload?.message ?? payload?.error ?? "Account request failed."
-  );
+async function acceptAuthResponse(data: AuthResponse) {
+  if (!data?.user || typeof data.user.id !== "string" || typeof data.user.email !== "string" ||
+      typeof data.session?.token !== "string" || !/^[A-Za-z0-9_-]{40,100}$/.test(data.session.token) ||
+      !Number.isFinite(Date.parse(data.session.expiresAt))) throw new AuthApiError("AUTH_INVALID_RESPONSE");
+  try { await saveSessionToken(data.session.token); }
+  catch (error) {
+    // A server session must not stay usable just because secure persistence failed.
+    try { await axios.post(`${getApiBaseUrl()}/auth/logout`, undefined, { headers: { Authorization: `Bearer ${data.session.token}` }, timeout: 5_000 }); } catch { /* Remote expiry remains the fallback; never log credentials. */ }
+    throw error;
+  }
+  return data.user;
 }
